@@ -3,7 +3,7 @@ import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firesto
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
-import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
 
 export default function ProgrammeDetailPage() {
   const { id } = useParams();
@@ -13,6 +13,7 @@ export default function ProgrammeDetailPage() {
   const [poolAssignments, setPoolAssignments] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
   const [relationships, setRelationships] = useState([]);
+  const [graphView, setGraphView] = useState(null);
   const [startupNames, setStartupNames] = useState({});
   const [contributorNames, setContributorNames] = useState({});
   const [loading, setLoading] = useState(true);
@@ -20,6 +21,7 @@ export default function ProgrammeDetailPage() {
 
   useEffect(() => {
     async function load() {
+      const getGraphView = httpsCallable(functions, 'get_programme_graph_view');
       const [programmeDoc, startupSnap, contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
         getDoc(doc(db, 'programmes', id)),
         getDocs(collection(db, 'companies')),
@@ -29,6 +31,7 @@ export default function ProgrammeDetailPage() {
         getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id))),
         getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
       ]);
+      const graphResult = await getGraphView({ programmeId: id });
 
       if (programmeDoc.exists()) setProgramme({ id: programmeDoc.id, ...programmeDoc.data() });
 
@@ -52,6 +55,7 @@ export default function ProgrammeDetailPage() {
       setPoolAssignments(poolList);
       setRecommendations(recList);
       setRelationships(relList);
+      setGraphView(graphResult.data);
       setLoading(false);
     }
 
@@ -182,6 +186,55 @@ export default function ProgrammeDetailPage() {
         </div>
       </div>
 
+      {graphView ? (
+        <div className="two-col" style={{ marginBottom: 20 }}>
+          <div className="card glass-panel">
+            <div className="card-header">
+              <h3>LatticeGraph</h3>
+            </div>
+            <div className="stat-rail" style={{ marginBottom: 0 }}>
+              <div className="stat-rail-card">
+                <strong>{graphView.counts?.acceptedStartups || 0}</strong>
+                <span>accepted startups in graph scope</span>
+              </div>
+              <div className="stat-rail-card">
+                <strong>{graphView.counts?.attachedMentors || 0}</strong>
+                <span>attached mentors</span>
+              </div>
+              <div className="stat-rail-card">
+                <strong>{(graphView.counts?.attachedPartners || 0) + (graphView.counts?.attachedInvestors || 0) + (graphView.counts?.attachedServiceProviders || 0)}</strong>
+                <span>attached non-mentor actors</span>
+              </div>
+              <div className="stat-rail-card">
+                <strong>{graphView.counts?.completedOutcomes || 0}</strong>
+                <span>successful outcomes tracked as evidence</span>
+              </div>
+            </div>
+            <GraphEvidence evidence={graphView.graphEvidence} />
+          </div>
+
+          <div className="card glass-panel">
+            <div className="card-header">
+              <h3>Graph Gap Insights</h3>
+            </div>
+            <div className="stack-list">
+              {(graphView.graphInsights || []).map((item) => (
+                <div key={`${item.type}-${item.summary}`} className="stack-item recommendation-item">
+                  <div className="stack-item-header">
+                    <div className="stack-item-title">{item.type}</div>
+                    <Badge variant={item.severity === 'high' ? 'red' : item.severity === 'medium' ? 'yellow' : 'green'}>
+                      {item.severity}
+                    </Badge>
+                  </div>
+                  <div className="stack-item-copy">{item.summary}</div>
+                  <div className="stack-item-copy" style={{ color: 'var(--color-text-secondary)' }}>{item.suggestedAction}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
           <h3>Startup Application Register</h3>
@@ -280,7 +333,9 @@ export default function ProgrammeDetailPage() {
                   </div>
                   <StatusPill status={item.status} />
                 </div>
+                <ScoreBreakdown breakdown={item.scoreBreakdown} />
                 <p className="recommendation-copy">{item.explanation}</p>
+                <GraphEvidence evidence={item.graphEvidence} />
               </div>
             ))}
             {relationships.map((item) => (

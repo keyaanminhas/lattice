@@ -113,6 +113,18 @@
       "matchScore": "number",
       "explanation": "string",
       "riskFlags": ["string"],
+      "scoreBreakdown": {
+        "ruleScore": "number",
+        "semanticScore": "number",
+        "graphScore": "number",
+        "finalScore": "number"
+      },
+      "graphEvidence": {
+        "summary": "string",
+        "edges": ["string"],
+        "pastOutcomeSignals": ["string"],
+        "riskFlags": ["string"]
+      },
       "status": "string ('Pending Approval', 'Approved', 'Rejected')",
       "createdAt": "timestamp",
       "updatedAt": "timestamp"
@@ -151,6 +163,26 @@
       "aiLesson": "string",
       "reusePattern": "boolean",
       "createdAt": "timestamp"
+    }
+  },
+  "graph_edges": {
+    "description": "Materialized relationship graph edges derived from existing operational collections for graph-aware retrieval and evidence.",
+    "schema": {
+      "id": "string",
+      "sourceType": "string",
+      "sourceId": "string",
+      "edgeType": "string ('OWNS', 'APPLIED_TO', 'ACCEPTED_INTO', 'ATTACHED_TO', 'MATCHED_WITH', 'PRODUCED_OUTCOME', 'HAS_CONFLICT')",
+      "targetType": "string",
+      "targetId": "string",
+      "programmeId": "string or null",
+      "status": "string",
+      "weight": "number",
+      "confidence": "number",
+      "createdFrom": "string",
+      "createdFromId": "string",
+      "metadata": "object",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
     }
   }
 }

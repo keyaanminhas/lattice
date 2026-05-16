@@ -1,6 +1,8 @@
 import json
+import hashlib
 import os
 import re
+import subprocess
 import time
 from datetime import datetime
 from typing import Any, Callable
@@ -17,6 +19,7 @@ RETRY_DELAY = 10
 STARTUP_PROGRAMME_THRESHOLD = 60.0
 CONTRIBUTOR_PROGRAMME_THRESHOLD = 65.0
 MENTOR_RECOMMENDATION_THRESHOLD = 70.0
+MAX_RECOMMENDATIONS_PER_CALL = 5
 VALID_DECISIONS = {"Approved", "Rejected"}
 VALID_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review", "Completed", "Rejected", "Expired"}
 VALID_OUTCOME_ACHIEVEMENTS = {"Yes", "Partial", "No"}
@@ -31,6 +34,16 @@ PROFILE_REQUIRED_FIELDS = (
     "readinessScore",
 )
 INSIGHT_REQUIRED_FIELDS = ("type", "title", "description", "severity")
+GRAPH_EXPLANATION_REQUIRED_FIELDS = ("summary", "edges", "pastOutcomeSignals", "riskFlags")
+GRAPH_EDGE_TYPES = {
+    "OWNS",
+    "APPLIED_TO",
+    "ACCEPTED_INTO",
+    "ATTACHED_TO",
+    "MATCHED_WITH",
+    "PRODUCED_OUTCOME",
+    "HAS_CONFLICT",
+}
 RELATIONSHIP_TRANSITIONS = {
     "Approved": {"Approved", "Active", "Expired", "Rejected"},
     "Active": {"Active", "Needs Review", "Completed", "Expired"},
@@ -54,6 +67,14 @@ RISK_PENALTIES = {
     "Mentor has limited remaining availability.": 5.0,
     "Domain fit is weaker than ideal.": 7.0,
     "Possible conflict of interest detected.": 15.0,
+    "Contributor is already attached to this programme.": 8.0,
+    "Programme has limited active resource coverage for this startup's needs.": 6.0,
+    "Programme has weak evidence for similar successful outcomes.": 5.0,
+    "Programme currently has limited accepted startup demand.": 4.0,
+    "This contributor does not clearly fill a current programme demand gap.": 7.0,
+    "Programme already has strong coverage for this contributor profile.": 4.0,
+    "No similar successful mentor outcomes were found in this programme context.": 5.0,
+    "Explicit conflict edge detected.": 30.0,
 }
 
 
@@ -62,6 +83,10 @@ def _sanitize(value: Any) -> Any:
         return {key: _sanitize(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_sanitize(item) for item in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_sanitize(item) for item in value.tolist()]
     if isinstance(value, datetime):
         return value.isoformat()
     return value
@@ -69,6 +94,14 @@ def _sanitize(value: Any) -> Any:
 
 def _init_firebase():
     try:
+        if os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}:
+            from google.auth.credentials import AnonymousCredentials
+            from google.cloud import firestore as google_firestore
+
+            return google_firestore.Client(
+                project=os.environ.get("GOOGLE_CLOUD_PROJECT", "lattice-2026"),
+                credentials=AnonymousCredentials(),
+            )
         initialize_app()
     except ValueError:
         pass
@@ -85,6 +118,90 @@ def _get_genai_client():
             message="GEMINI_API_KEY is not configured.",
         )
     return genai.Client(api_key=api_key)
+
+
+def _has_gemini_api_key() -> bool:
+    return bool(os.environ.get("GEMINI_API_KEY"))
+
+
+def _running_in_firestore_emulator() -> bool:
+    return os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"} or bool(
+        os.environ.get("FIRESTORE_EMULATOR_HOST")
+    )
+
+
+def _gemini_rest_post(model: str, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="GEMINI_API_KEY is not configured.",
+        )
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{method}"
+    process = subprocess.run(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--request",
+            "POST",
+            url,
+            "--header",
+            f"x-goog-api-key: {api_key}",
+            "--header",
+            "Content-Type: application/json",
+            "--data-raw",
+            json.dumps(payload),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    if process.returncode != 0:
+        stderr = (process.stderr or process.stdout or "").strip()
+        raise RuntimeError(f"Gemini REST {method} failed: {stderr}")
+    return json.loads(process.stdout or "{}")
+
+
+def _gemini_rest_generate_text(model: str, prompt: str) -> str:
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": prompt,
+                    }
+                ]
+            }
+        ]
+    }
+    response = _gemini_rest_post(model, "generateContent", payload)
+    candidates = response.get("candidates") or []
+    if not candidates:
+        return ""
+    content = candidates[0].get("content") or {}
+    parts = content.get("parts") or []
+    texts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    return "".join(texts).strip()
+
+
+def _gemini_rest_embed_text(model: str, text: str) -> list[float]:
+    payload = {
+        "content": {
+            "parts": [
+                {
+                    "text": text,
+                }
+            ]
+        }
+    }
+    response = _gemini_rest_post(model, "embedContent", payload)
+    embedding = response.get("embedding") or {}
+    values = embedding.get("values") or []
+    return [float(value) for value in values]
 
 
 def _retryable_model_call(fn: Callable[[], Any]):
@@ -227,12 +344,41 @@ def _relationship_document_id(
     )
 
 
+def _graph_edge_document_id(
+    source_type: str,
+    source_id: str,
+    edge_type: str,
+    target_type: str,
+    target_id: str,
+) -> str:
+    return "__".join(
+        [
+            _safe_id_part(source_type),
+            _safe_id_part(source_id),
+            _safe_id_part(edge_type),
+            _safe_id_part(target_type),
+            _safe_id_part(target_id),
+        ]
+    )
+
+
+def _edge_evidence_text(edge: dict[str, Any]) -> str:
+    return (
+        f"{edge.get('sourceType', 'Entity')} {edge.get('sourceId', '')} "
+        f"{edge.get('edgeType', 'LINKED_TO')} "
+        f"{edge.get('targetType', 'Entity')} {edge.get('targetId', '')}"
+    ).strip()
+
+
 def _generate_text(model: str, prompt: str) -> str:
-    client = _get_genai_client()
+    if not _has_gemini_api_key():
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="GEMINI_API_KEY is not configured.",
+        )
 
     def _call():
-        response = client.models.generate_content(model=model, contents=prompt)
-        return (response.text or "").strip()
+        return _gemini_rest_generate_text(model, prompt)
 
     return _retryable_model_call(_call)
 
@@ -334,6 +480,25 @@ def _normalise_insights_payload(payload: Any) -> list[dict[str, str]]:
     return insights
 
 
+def _normalise_graph_explanation_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Graph explanation payload must be an object.")
+    missing = [field for field in GRAPH_EXPLANATION_REQUIRED_FIELDS if field not in payload]
+    if missing:
+        raise ValueError(f"Graph explanation payload is missing fields: {', '.join(missing)}.")
+
+    summary = payload["summary"]
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("summary must be a non-empty string.")
+
+    return {
+        "summary": summary.strip(),
+        "edges": _coerce_string_list(payload["edges"], "edges")[:5],
+        "pastOutcomeSignals": _coerce_string_list(payload["pastOutcomeSignals"], "pastOutcomeSignals")[:3],
+        "riskFlags": _coerce_string_list(payload["riskFlags"], "riskFlags")[:4],
+    }
+
+
 def _generate_json_payload(model: str, prompt: str, expected_type: type, normaliser: Callable[[Any], Any]):
     raw = _generate_text(model, prompt)
     try:
@@ -347,14 +512,22 @@ def _generate_json_payload(model: str, prompt: str, expected_type: type, normali
 
 
 def get_embedding(text: str) -> list[float]:
-    client = _get_genai_client()
+    if not _has_gemini_api_key():
+        tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
+        if not tokens:
+            return [0.0] * 64
+        vector = [0.0] * 64
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            index = int(digest[:8], 16) % len(vector)
+            vector[index] += 1.0
+        norm = float(np.linalg.norm(vector))
+        if norm == 0:
+            return vector
+        return [round(value / norm, 6) for value in vector]
 
     def _call():
-        response = client.models.embed_content(
-            model="gemini-embedding-2",
-            contents=text,
-        )
-        return response.embeddings[0].values
+        return _gemini_rest_embed_text("gemini-embedding-2", text)
 
     return _retryable_model_call(_call)
 
@@ -484,8 +657,15 @@ def _eligibility_score(startup: dict, programme: dict) -> tuple[float, list[str]
     return max(score, 0.0), risks
 
 
-def _blended_total(base_score: float, similarity: float, semantic_weight: float = 20.0) -> float:
-    return round(min(100.0, base_score * 0.8 + max(similarity, 0.0) * semantic_weight), 2)
+def _similarity_score(similarity: float) -> float:
+    return round(max(0.0, min(1.0, similarity)) * 100.0, 2)
+
+
+def _graph_blended_total(rule_score: float, semantic_score: float, graph_score: float) -> float:
+    return round(
+        max(0.0, min(100.0, rule_score * 0.60 + semantic_score * 0.20 + graph_score * 0.20)),
+        2,
+    )
 
 
 def _apply_risk_penalties(score: float, risks: list[str]) -> tuple[float, list[str]]:
@@ -495,7 +675,7 @@ def _apply_risk_penalties(score: float, risks: list[str]) -> tuple[float, list[s
     return adjusted, unique_risks
 
 
-def _startup_programme_score(startup: dict, programme: dict, similarity: float) -> tuple[float, list[str]]:
+def _startup_programme_rule_score(startup: dict, programme: dict) -> tuple[float, list[str], dict[str, float]]:
     sector_fit = 25.0 if startup.get("industry") in programme.get("targetSectors", []) else _overlap_score(
         [startup.get("industry", "")], programme.get("targetSectors", []), 25
     )
@@ -507,7 +687,7 @@ def _startup_programme_score(startup: dict, programme: dict, similarity: float) 
         10,
     )
     eligibility_fit, risks = _eligibility_score(startup, programme)
-    total = _blended_total(sector_fit + stage_fit + need_fit + eligibility_fit + region_fit, similarity)
+    total = sector_fit + stage_fit + need_fit + eligibility_fit + region_fit
 
     if sector_fit < 12:
         risks.append("Sector fit is weak for this programme.")
@@ -516,10 +696,17 @@ def _startup_programme_score(startup: dict, programme: dict, similarity: float) 
     if need_fit < 10:
         risks.append("Programme outcomes do not strongly cover the startup's top support needs.")
 
-    return _apply_risk_penalties(total, risks)
+    adjusted, risks = _apply_risk_penalties(total, risks)
+    return adjusted, risks, {
+        "sectorFit": round(sector_fit, 2),
+        "stageFit": round(stage_fit, 2),
+        "needFit": round(need_fit, 2),
+        "eligibilityFit": round(eligibility_fit, 2),
+        "regionFit": round(region_fit, 2),
+    }
 
 
-def _contributor_programme_score(contributor: dict, programme: dict, similarity: float) -> tuple[float, list[str], str]:
+def _contributor_programme_rule_score(contributor: dict, programme: dict) -> tuple[float, list[str], str, dict[str, float]]:
     contributor_type = _normalise_type(contributor)
     programme_sectors = programme.get("targetSectors", [])
     programme_stages = programme.get("targetStages", [])
@@ -533,9 +720,17 @@ def _contributor_programme_score(contributor: dict, programme: dict, similarity:
         capacity_fit = 15.0 if contributor.get("availability") == "Available" else 8.0 if contributor.get("availability") == "Limited" else 0.0
         region_fit = _country_fit(programme_country, contributor.get("countryCoverage", []), 10)
         outcome_fit = min(float(contributor.get("rating", 0)) * 2, 10.0)
-        total = _blended_total(expertise_fit + sector_fit + stage_fit + capacity_fit + region_fit + outcome_fit, similarity)
+        total = expertise_fit + sector_fit + stage_fit + capacity_fit + region_fit + outcome_fit
         if capacity_fit < 10:
             risks.append("Mentor availability is limited.")
+        breakdown = {
+            "expertiseFit": round(expertise_fit, 2),
+            "sectorFit": round(sector_fit, 2),
+            "stageFit": round(stage_fit, 2),
+            "capacityFit": round(capacity_fit, 2),
+            "regionFit": round(region_fit, 2),
+            "outcomeFit": round(outcome_fit, 2),
+        }
     elif contributor_type == "Investor":
         thesis_fit = _overlap_score(contributor.get("investmentThesis", []), programme_sectors, 30)
         sector_fit = _overlap_score(contributor.get("investmentThesis", []), programme_sectors, 20)
@@ -543,9 +738,17 @@ def _contributor_programme_score(contributor: dict, programme: dict, similarity:
         ticket_fit = 10.0 if contributor.get("ticketSize") else 4.0
         region_fit = _country_fit(programme_country, contributor.get("countryCoverage", []), 10)
         strategic_fit = _overlap_score(programme.get("expectedOutcomes", []), contributor.get("investmentThesis", []), 10)
-        total = _blended_total(thesis_fit + sector_fit + stage_fit + ticket_fit + region_fit + strategic_fit, similarity)
+        total = thesis_fit + sector_fit + stage_fit + ticket_fit + region_fit + strategic_fit
         if stage_fit < 10:
             risks.append("Investor stage focus does not strongly match the programme.")
+        breakdown = {
+            "thesisFit": round(thesis_fit, 2),
+            "sectorFit": round(sector_fit, 2),
+            "stageFit": round(stage_fit, 2),
+            "ticketFit": round(ticket_fit, 2),
+            "regionFit": round(region_fit, 2),
+            "strategicFit": round(strategic_fit, 2),
+        }
     elif contributor_type == "Partner":
         strategic_fit = _overlap_score(contributor.get("expertise", []), programme.get("expectedOutcomes", []), 30)
         sector_fit = _overlap_score(contributor.get("expertise", []), programme_sectors, 20)
@@ -553,7 +756,15 @@ def _contributor_programme_score(contributor: dict, programme: dict, similarity:
         activation_fit = 10.0 if contributor.get("availability") == "Available" else 5.0
         region_fit = _country_fit(programme_country, contributor.get("countryCoverage", []), 10)
         value_fit = _overlap_score(contributor.get("expertise", []), programme.get("expectedOutcomes", []), 10)
-        total = _blended_total(strategic_fit + sector_fit + stage_fit + activation_fit + region_fit + value_fit, similarity)
+        total = strategic_fit + sector_fit + stage_fit + activation_fit + region_fit + value_fit
+        breakdown = {
+            "strategicFit": round(strategic_fit, 2),
+            "sectorFit": round(sector_fit, 2),
+            "stageFit": round(stage_fit, 2),
+            "activationFit": round(activation_fit, 2),
+            "regionFit": round(region_fit, 2),
+            "valueFit": round(value_fit, 2),
+        }
     else:
         service_fit = _overlap_score(contributor.get("expertise", []), programme.get("expectedOutcomes", []), 30)
         sector_fit = _overlap_score(contributor.get("expertise", []), programme_sectors, 20)
@@ -561,25 +772,33 @@ def _contributor_programme_score(contributor: dict, programme: dict, similarity:
         availability_fit = 15.0 if contributor.get("availability") == "Available" else 8.0 if contributor.get("availability") == "Limited" else 0.0
         region_fit = _country_fit(programme_country, contributor.get("countryCoverage", []), 10)
         value_fit = min(float(contributor.get("rating", 0)) * 2, 10.0)
-        total = _blended_total(service_fit + sector_fit + stage_fit + availability_fit + region_fit + value_fit, similarity)
+        total = service_fit + sector_fit + stage_fit + availability_fit + region_fit + value_fit
         if availability_fit == 0:
             risks.append("Contributor is currently unavailable.")
+        breakdown = {
+            "serviceFit": round(service_fit, 2),
+            "sectorFit": round(sector_fit, 2),
+            "stageFit": round(stage_fit, 2),
+            "availabilityFit": round(availability_fit, 2),
+            "regionFit": round(region_fit, 2),
+            "valueFit": round(value_fit, 2),
+        }
 
     if contributor.get("availability") == "Unavailable":
         risks.append("Contributor is unavailable.")
 
     total, risks = _apply_risk_penalties(total, risks)
-    return total, risks, contributor_type
+    return total, risks, contributor_type, breakdown
 
 
-def _startup_mentor_score(startup: dict, contributor: dict, programme: dict, similarity: float) -> tuple[float, list[str]]:
+def _startup_mentor_rule_score(startup: dict, contributor: dict, programme: dict) -> tuple[float, list[str], dict[str, float]]:
     needs_fit = _overlap_score(startup.get("supportNeeds", []), contributor.get("expertise", []), 30)
     domain_fit = _overlap_score([startup.get("industry", "")], contributor.get("expertise", []), 20)
     stage_fit = _overlap_score([startup.get("stage", "")], contributor.get("supportedStages", []), 15)
     region_fit = _country_fit(startup.get("country", ""), contributor.get("countryCoverage", []), 10)
     capacity_fit = 15.0 if contributor.get("availability") == "Available" else 7.0 if contributor.get("availability") == "Limited" else 0.0
     programme_fit = _overlap_score(contributor.get("expertise", []), programme.get("expectedOutcomes", []), 10)
-    total = _blended_total(needs_fit + domain_fit + stage_fit + region_fit + capacity_fit + programme_fit, similarity)
+    total = needs_fit + domain_fit + stage_fit + region_fit + capacity_fit + programme_fit
     risks = []
 
     if capacity_fit == 0:
@@ -593,7 +812,15 @@ def _startup_mentor_score(startup: dict, contributor: dict, programme: dict, sim
         if any(area.lower() in startup_name for area in contributor.get("conflictAreas", [])):
             risks.append("Possible conflict of interest detected.")
 
-    return _apply_risk_penalties(total, risks)
+    adjusted, risks = _apply_risk_penalties(total, risks)
+    return adjusted, risks, {
+        "needsFit": round(needs_fit, 2),
+        "domainFit": round(domain_fit, 2),
+        "stageFit": round(stage_fit, 2),
+        "regionFit": round(region_fit, 2),
+        "capacityFit": round(capacity_fit, 2),
+        "programmeFit": round(programme_fit, 2),
+    }
 
 
 def _capacity_value(contributor: dict, field_name: str) -> int | None:
@@ -650,46 +877,498 @@ def _count_approved_programmes(db, contributor_id: str) -> int:
     return len(assignments)
 
 
-def _build_explanation_fallback(context: str, payload: dict) -> str:
-    score = payload.get("score")
-    score_text = f"Score {score}" if isinstance(score, (int, float)) else "The match"
+def upsert_graph_edge(
+    db,
+    source_type: str,
+    source_id: str,
+    edge_type: str,
+    target_type: str,
+    target_id: str,
+    programme_id: str | None = None,
+    status: str = "active",
+    weight: float = 1.0,
+    confidence: float = 1.0,
+    created_from: str | None = None,
+    created_from_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if edge_type not in GRAPH_EDGE_TYPES:
+        raise ValueError(f"Unsupported edge type: {edge_type}")
+
+    doc_id = _graph_edge_document_id(source_type, source_id, edge_type, target_type, target_id)
+    ref = db.collection("graph_edges").document(doc_id)
+    existing = ref.get()
+    payload = {
+        "id": doc_id,
+        "sourceType": source_type,
+        "sourceId": source_id,
+        "edgeType": edge_type,
+        "targetType": target_type,
+        "targetId": target_id,
+        "programmeId": programme_id,
+        "status": status,
+        "weight": round(float(weight), 2),
+        "confidence": round(float(confidence), 2),
+        "createdFrom": created_from or "",
+        "createdFromId": created_from_id or "",
+        "metadata": metadata or {},
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    if existing.exists:
+        ref.set(payload, merge=True)
+    else:
+        ref.set({**payload, "createdAt": firestore.SERVER_TIMESTAMP}, merge=False)
+    return {**payload, "createdAt": existing.to_dict().get("createdAt") if existing.exists else None}
+
+
+def list_graph_edges(
+    db,
+    programme_id: str | None = None,
+    source_id: str | None = None,
+    target_id: str | None = None,
+    edge_type: str | None = None,
+) -> list[dict[str, Any]]:
+    filters = {}
+    if programme_id:
+        filters["programmeId"] = programme_id
+    if source_id:
+        filters["sourceId"] = source_id
+    if target_id:
+        filters["targetId"] = target_id
+    if edge_type:
+        filters["edgeType"] = edge_type
+    return _list_by_fields(db, "graph_edges", filters)
+
+
+def _lookup_documents_by_ids(db, collection_name: str, doc_ids: list[str]) -> list[dict[str, Any]]:
+    results = []
+    for doc_id in dict.fromkeys([item for item in doc_ids if item]):
+        doc = db.collection(collection_name).document(doc_id).get()
+        if doc.exists:
+            results.append({"id": doc.id, **doc.to_dict()})
+    return results
+
+
+def _positive_outcome_signal(db, relationship: dict[str, Any], outcome: dict[str, Any]) -> str:
+    relationship_type = relationship.get("relationshipType", "Relationship")
+    outcome_quality = outcome.get("relationshipQuality", "Unknown")
+    achieved = outcome.get("outcomeAchieved", "Unknown")
+    expected = relationship.get("expectedOutcome", "outcomes")
+    return (
+        f"{relationship_type} in programme {relationship.get('programmeId', '')} "
+        f"achieved {achieved} with {outcome_quality.lower()} quality around {expected.lower()}."
+    )
+
+
+def get_programme_subgraph(db, programme_id: str) -> dict[str, Any]:
+    programme_doc = _get_document_or_error(db, "programmes", programme_id, "Programme")
+    programme = {"id": programme_doc.id, **programme_doc.to_dict()}
+    applications = _list_by_fields(db, "applications", {"programmeId": programme_id})
+    accepted_applications = [item for item in applications if item.get("status") == "Accepted"]
+    startup_ids = [item.get("startupId") for item in accepted_applications]
+    startups = _lookup_documents_by_ids(db, "companies", startup_ids)
+
+    pools = _list_by_fields(db, "programmeContributors", {"programmeId": programme_id, "status": "Approved"})
+    contributors = _lookup_documents_by_ids(db, "contributors", [item.get("contributorId") for item in pools])
+    contributor_map = {item["id"]: item for item in contributors}
+
+    relationships = _list_by_fields(db, "relationships", {"programmeId": programme_id})
+    outcomes = []
+    for relationship in relationships:
+        outcome = _find_one_by_fields(db, "outcomes", {"relationshipId": relationship["id"]})
+        if outcome:
+            outcomes.append(outcome)
+
+    edges = list_graph_edges(db, programme_id=programme_id)
+    outcomes_by_relationship = {item["relationshipId"]: item for item in outcomes}
+    outcome_signals = [
+        _positive_outcome_signal(db, relationship, outcomes_by_relationship[relationship["id"]])
+        for relationship in relationships
+        if relationship["id"] in outcomes_by_relationship
+        and outcomes_by_relationship[relationship["id"]].get("reusePattern")
+    ]
+
+    mentors = []
+    partners = []
+    investors = []
+    service_providers = []
+    for pool in pools:
+        contributor = contributor_map.get(pool.get("contributorId"))
+        if not contributor:
+            continue
+        contributor_type = pool.get("contributorType")
+        if contributor_type == "Mentor":
+            mentors.append(contributor)
+        elif contributor_type == "Partner":
+            partners.append(contributor)
+        elif contributor_type == "Investor":
+            investors.append(contributor)
+        else:
+            service_providers.append(contributor)
+
+    counts = {
+        "acceptedStartups": len(startups),
+        "attachedMentors": len(mentors),
+        "attachedPartners": len(partners),
+        "attachedInvestors": len(investors),
+        "attachedServiceProviders": len(service_providers),
+        "activeMentorRelationships": len(
+            [
+                item
+                for item in relationships
+                if item.get("relationshipType") == "Startup-to-Mentor"
+                and item.get("status") in ACTIVE_MENTOR_RELATIONSHIP_STATUSES
+            ]
+        ),
+        "completedOutcomes": len([item for item in outcomes if item.get("outcomeAchieved") == "Yes"]),
+        "graphEdges": len(edges),
+    }
+
+    return {
+        "programme": programme,
+        "applications": applications,
+        "acceptedApplications": accepted_applications,
+        "startups": startups,
+        "pools": pools,
+        "contributors": contributors,
+        "mentors": mentors,
+        "partners": partners,
+        "investors": investors,
+        "serviceProviders": service_providers,
+        "relationships": relationships,
+        "outcomes": outcomes,
+        "edges": edges,
+        "positiveOutcomeSignals": outcome_signals[:5],
+        "counts": counts,
+    }
+
+
+def get_startup_programme_graph_context(db, startup_id: str, programme_id: str) -> dict[str, Any]:
+    startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
+    startup = {"id": startup_doc.id, **startup_doc.to_dict()}
+    subgraph = get_programme_subgraph(db, programme_id)
+    contributor_capabilities = []
+    for contributor in subgraph["contributors"]:
+        contributor_capabilities.extend(
+            contributor.get("expertise")
+            or contributor.get("investmentThesis")
+            or contributor.get("canSupport")
+            or []
+        )
+
+    evidence_edges = [
+        _edge_evidence_text(edge)
+        for edge in subgraph["edges"]
+        if edge.get("edgeType") in {"OWNS", "ATTACHED_TO", "ACCEPTED_INTO"}
+    ]
+    return {
+        "startup": startup,
+        "programme": subgraph["programme"],
+        "subgraph": subgraph,
+        "resourceTokens": sorted(_list_tokens(contributor_capabilities)),
+        "evidenceEdges": evidence_edges[:5],
+        "pastOutcomeSignals": subgraph["positiveOutcomeSignals"][:3],
+    }
+
+
+def get_contributor_programme_graph_context(db, contributor_id: str, programme_id: str) -> dict[str, Any]:
+    contributor_doc = _get_document_or_error(db, "contributors", contributor_id, "Contributor")
+    contributor = {"id": contributor_doc.id, **contributor_doc.to_dict()}
+    subgraph = get_programme_subgraph(db, programme_id)
+    accepted_startups = subgraph["startups"]
+    demand_tokens = _list_tokens([need for startup in accepted_startups for need in startup.get("supportNeeds", [])])
+    contributor_tokens = _list_tokens(
+        contributor.get("expertise")
+        or contributor.get("investmentThesis")
+        or contributor.get("canSupport")
+        or []
+    )
+    already_attached = any(item.get("contributorId") == contributor_id for item in subgraph["pools"])
+    approved_programme_count = _count_approved_programmes(db, contributor_id)
+    evidence_edges = [_edge_evidence_text(edge) for edge in subgraph["edges"] if edge.get("edgeType") == "ATTACHED_TO"]
+    return {
+        "contributor": contributor,
+        "programme": subgraph["programme"],
+        "subgraph": subgraph,
+        "demandTokens": sorted(demand_tokens),
+        "contributorTokens": sorted(contributor_tokens),
+        "alreadyAttached": already_attached,
+        "approvedProgrammeCount": approved_programme_count,
+        "evidenceEdges": evidence_edges[:5],
+        "pastOutcomeSignals": subgraph["positiveOutcomeSignals"][:3],
+    }
+
+
+def get_startup_mentor_graph_context(db, startup_id: str, mentor_id: str, programme_id: str) -> dict[str, Any]:
+    startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
+    mentor_doc = _get_document_or_error(db, "contributors", mentor_id, "Contributor")
+    startup = {"id": startup_doc.id, **startup_doc.to_dict()}
+    mentor = {"id": mentor_doc.id, **mentor_doc.to_dict()}
+    subgraph = get_programme_subgraph(db, programme_id)
+    mentor_relationships = [
+        item
+        for item in subgraph["relationships"]
+        if item.get("relationshipType") == "Startup-to-Mentor" and item.get("targetEntityId") == mentor_id
+    ]
+    mentor_outcomes = []
+    mentor_pairs = []
+    for relationship in mentor_relationships:
+        outcome = _find_one_by_fields(db, "outcomes", {"relationshipId": relationship["id"]})
+        if outcome:
+            mentor_outcomes.append(outcome)
+            mentor_pairs.append((relationship, outcome))
+
+    conflict_edges = [
+        edge
+        for edge in list_graph_edges(db, edge_type="HAS_CONFLICT")
+        if {
+            edge.get("sourceId"),
+            edge.get("targetId"),
+        }
+        == {startup_id, mentor_id}
+    ]
+    evidence_edges = [
+        _edge_evidence_text(edge)
+        for edge in subgraph["edges"]
+        if (
+            edge.get("sourceId") in {startup_id, mentor_id}
+            or edge.get("targetId") in {startup_id, mentor_id}
+            or edge.get("edgeType") == "ATTACHED_TO"
+        )
+    ]
+    past_outcomes = [
+        _positive_outcome_signal(db, relationship, outcome)
+        for relationship, outcome in mentor_pairs
+        if outcome.get("reusePattern")
+    ]
+    return {
+        "startup": startup,
+        "mentor": mentor,
+        "programme": subgraph["programme"],
+        "subgraph": subgraph,
+        "mentorRelationships": mentor_relationships,
+        "mentorOutcomes": mentor_outcomes,
+        "conflictEdges": conflict_edges,
+        "evidenceEdges": evidence_edges[:5],
+        "pastOutcomeSignals": past_outcomes[:3] or subgraph["positiveOutcomeSignals"][:3],
+    }
+
+
+def calculate_graph_score(context: dict[str, Any], relationship_type: str) -> dict[str, Any]:
+    risks = []
+    hard_reject = False
+    reject_reason = None
+    breakdown: dict[str, float] = {}
+    evidence_edges = list(context.get("evidenceEdges", []))
+    past_outcome_signals = list(context.get("pastOutcomeSignals", []))
+
+    if relationship_type == "Startup-to-Programme":
+        startup = context["startup"]
+        subgraph = context["subgraph"]
+        support_need_tokens = _list_tokens(startup.get("supportNeeds", []))
+        resource_tokens = set(context.get("resourceTokens", []))
+        resource_overlap = len(support_need_tokens & resource_tokens)
+        resource_coverage = min(30.0, resource_overlap * 8.0)
+        prior_success = min(30.0, len(past_outcome_signals) * 10.0)
+        programme_health = min(20.0, subgraph["counts"]["acceptedStartups"] * 2.0 + subgraph["counts"]["activeMentorRelationships"] * 3.0)
+        pool_depth = min(
+            20.0,
+            subgraph["counts"]["attachedMentors"] * 4.0
+            + subgraph["counts"]["attachedPartners"] * 2.0
+            + subgraph["counts"]["attachedInvestors"] * 2.0
+            + subgraph["counts"]["attachedServiceProviders"] * 2.0,
+        )
+        if resource_coverage < 12:
+            risks.append("Programme has limited active resource coverage for this startup's needs.")
+        if prior_success < 10:
+            risks.append("Programme has weak evidence for similar successful outcomes.")
+        breakdown = {
+            "resourceCoverage": round(resource_coverage, 2),
+            "priorSuccess": round(prior_success, 2),
+            "programmeHealth": round(programme_health, 2),
+            "poolDepth": round(pool_depth, 2),
+        }
+    elif relationship_type.endswith("-to-Programme"):
+        contributor = context["contributor"]
+        subgraph = context["subgraph"]
+        if context.get("alreadyAttached"):
+            risks.append("Contributor is already attached to this programme.")
+        demand_tokens = set(context.get("demandTokens", []))
+        contributor_tokens = set(context.get("contributorTokens", []))
+        fills_gap = min(35.0, len(demand_tokens & contributor_tokens) * 8.0)
+        accepted_startup_demand = min(20.0, len(subgraph["startups"]) * 4.0)
+        type_capacity = 0
+        contributor_type = _normalise_type(contributor)
+        if contributor_type == "Mentor":
+            max_programmes = _capacity_value(contributor, "globalMaxProgrammes")
+            approved_programmes = context.get("approvedProgrammeCount", 0)
+            type_capacity = 20.0 if max_programmes is None else max(0.0, 20.0 - approved_programmes * 4.0)
+        else:
+            type_capacity = 20.0 if contributor.get("availability") == "Available" else 10.0
+        existing_coverage = max(
+            0.0,
+            25.0
+            - len(
+                [
+                    pool
+                    for pool in subgraph["pools"]
+                    if pool.get("contributorType") == contributor_type
+                ]
+            )
+            * 5.0,
+        )
+        if accepted_startup_demand < 8:
+            risks.append("Programme currently has limited accepted startup demand.")
+        if fills_gap < 10:
+            risks.append("This contributor does not clearly fill a current programme demand gap.")
+        if existing_coverage < 8:
+            risks.append("Programme already has strong coverage for this contributor profile.")
+        breakdown = {
+            "fillsGap": round(fills_gap, 2),
+            "acceptedStartupDemand": round(accepted_startup_demand, 2),
+            "capacityRemaining": round(type_capacity, 2),
+            "existingCoverageNeed": round(existing_coverage, 2),
+        }
+    else:
+        if context.get("conflictEdges"):
+            hard_reject = True
+            reject_reason = "Explicit conflict edge detected."
+            risks.append(reject_reason)
+        subgraph = context["subgraph"]
+        mentor = context["mentor"]
+        mentor_attached = any(
+            pool.get("contributorId") == mentor["id"] and pool.get("contributorType") == "Mentor"
+            for pool in subgraph["pools"]
+        )
+        startup_accepted = any(item.get("startupId") == context["startup"]["id"] for item in subgraph["acceptedApplications"])
+        capacity_available = 15.0 if mentor.get("availability") == "Available" else 8.0 if mentor.get("availability") == "Limited" else 0.0
+        expertise_overlap = min(
+            25.0,
+            len(_list_tokens(context["startup"].get("supportNeeds", [])) & _list_tokens(mentor.get("expertise", []))) * 8.0,
+        )
+        prior_success = min(20.0, len(past_outcome_signals) * 10.0)
+        programme_history = min(20.0, len(subgraph["relationships"]) * 1.5)
+        breakdown = {
+            "acceptedStartupContext": 20.0 if startup_accepted else 0.0,
+            "attachedToProgramme": 20.0 if mentor_attached else 0.0,
+            "capacityAvailable": round(capacity_available, 2),
+            "expertiseOverlap": round(expertise_overlap, 2),
+            "priorSuccess": round(prior_success, 2),
+            "programmeHistory": round(programme_history, 2),
+        }
+        if prior_success < 10:
+            risks.append("No similar successful mentor outcomes were found in this programme context.")
+
+    graph_score = round(min(100.0, sum(breakdown.values())), 2)
+    graph_score, risks = _apply_risk_penalties(graph_score, risks)
+    return {
+        "graphScore": graph_score,
+        "breakdown": breakdown,
+        "hardReject": hard_reject,
+        "rejectReason": reject_reason,
+        "riskFlags": risks,
+        "evidenceEdges": evidence_edges[:5],
+        "pastOutcomeSignals": past_outcome_signals[:3],
+    }
+
+
+def _programme_graph_gaps(subgraph: dict[str, Any]) -> list[dict[str, str]]:
+    need_counts: dict[str, int] = {}
+    for startup in subgraph["startups"]:
+        for need in startup.get("supportNeeds", []):
+            need_counts[need] = need_counts.get(need, 0) + 1
+
+    expertise_counts: dict[str, int] = {}
+    for contributor in subgraph["contributors"]:
+        for expertise in contributor.get("expertise", []) or contributor.get("investmentThesis", []):
+            expertise_counts[expertise] = expertise_counts.get(expertise, 0) + 1
+
+    gaps = []
+    for need, demand in sorted(need_counts.items(), key=lambda item: item[1], reverse=True)[:5]:
+        coverage = sum(count for expertise, count in expertise_counts.items() if need.lower() in expertise.lower())
+        if coverage >= demand:
+            continue
+        severity = "high" if demand - coverage >= 2 else "medium"
+        gaps.append(
+            {
+                "type": "capacity_gap",
+                "severity": severity,
+                "summary": f"{demand} startups need {need}, but only {coverage} attached contributors clearly cover it.",
+                "suggestedAction": f"Attach more contributors with {need} coverage to {subgraph['programme']['name']}.",
+            }
+        )
+
+    if not gaps:
+        gaps.append(
+            {
+                "type": "coverage_ok",
+                "severity": "low",
+                "summary": "Current accepted startup demand is broadly covered by the programme actor pool.",
+                "suggestedAction": "Maintain the current mix and watch for new demand as more startups are accepted.",
+            }
+        )
+    return gaps[:4]
+
+
+def _build_graph_explanation_fallback(context: str, payload: dict) -> dict[str, Any]:
+    score_breakdown = payload.get("scoreBreakdown", {})
     startup = payload.get("startup", {}).get("name")
     programme = payload.get("programme", {}).get("name")
-    contributor = payload.get("contributor", {}).get("name")
+    contributor = payload.get("target", {}).get("name") or payload.get("contributor", {}).get("name")
 
     if startup and programme and contributor:
-        subject = f"{contributor} is a strong fit for {startup} within {programme}"
+        summary = f"{contributor} is a strong fit for {startup} in {programme} because the graph context supports the relationship."
     elif startup and programme:
-        subject = f"{startup} aligns well with {programme}"
+        summary = f"{startup} is a strong fit for {programme} because the programme graph shows relevant coverage and outcomes."
     elif contributor and programme:
-        subject = f"{contributor} aligns well with {programme}"
+        summary = f"{contributor} is a strong fit for {programme} because the programme graph shows live demand for that profile."
     else:
-        subject = f"{context} shows a strong fit"
+        summary = f"{context} is supported by the current graph context and score breakdown."
 
-    risks = payload.get("risks") or []
-    risk_text = risks[0] if risks else "No blocking risk flags were detected, but admin review should still confirm fit."
-    return f"{subject}. {score_text} is supported by the structured scoring signals. Risk to watch: {risk_text}"
+    if isinstance(score_breakdown.get("finalScore"), (int, float)):
+        summary = f"{summary} Final score: {round(score_breakdown['finalScore'])}%."
+
+    graph_context = payload.get("graphContext", {})
+    return {
+        "summary": summary,
+        "edges": list(graph_context.get("evidenceEdges", []))[:5],
+        "pastOutcomeSignals": list(graph_context.get("pastOutcomeSignals", []))[:3],
+        "riskFlags": list(payload.get("riskFlags", []))[:4],
+    }
 
 
-def _generate_explanation(context: str, payload: dict) -> str:
+def _generate_graph_explanation(context: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if _running_in_firestore_emulator() or not _has_gemini_api_key():
+        return _build_graph_explanation_fallback(context, payload)
+
     prompt = f"""
     You are the AI Relationship Engine for a programme-first startup ecosystem platform called Lattice.
     Context: {context}
     Data: {json.dumps(_sanitize(payload))}
 
-    Write a concise explanation in 2 sentences.
-    Sentence 1: why the match is strong.
-    Sentence 2: one realistic governance or capacity risk to watch.
+    Return ONLY a JSON object with exactly these fields:
+    - summary: string
+    - edges: array of short evidence strings grounded in the provided graph context
+    - pastOutcomeSignals: array of short evidence strings from prior outcomes
+    - riskFlags: array of short governance or capacity risks
+
+    Requirements:
+    - Keep summary to 1-2 sentences.
+    - Do not invent entities or edges not present in the payload.
+    - Prefer graph evidence and prior outcomes over generic claims.
+    - If risk flags are light, still include the most important watchout.
     """
 
     _get_genai_client()
     try:
-        explanation = _generate_text("gemini-3.1-flash-lite", prompt)
-        if not explanation:
-            return _build_explanation_fallback(context, payload)
-        return explanation
+        return _generate_json_payload(
+            "gemini-3.1-flash-lite",
+            prompt,
+            dict,
+            _normalise_graph_explanation_payload,
+        )
     except Exception:
-        return _build_explanation_fallback(context, payload)
+        return _build_graph_explanation_fallback(context, payload)
 
 
 def _build_recommendation_payload(
@@ -703,6 +1382,8 @@ def _build_recommendation_payload(
     match_score: float,
     explanation: str,
     risk_flags: list[str],
+    score_breakdown: dict[str, Any] | None = None,
+    graph_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "recommendationType": recommendation_type,
@@ -714,6 +1395,8 @@ def _build_recommendation_payload(
         "matchScore": match_score,
         "explanation": explanation,
         "riskFlags": risk_flags,
+        "scoreBreakdown": score_breakdown or {},
+        "graphEvidence": graph_evidence or {},
         "updatedAt": firestore.SERVER_TIMESTAMP,
     }
     if existing:
@@ -735,6 +1418,8 @@ def _upsert_recommendation(
     match_score: float,
     explanation: str,
     risk_flags: list[str],
+    score_breakdown: dict[str, Any] | None = None,
+    graph_evidence: dict[str, Any] | None = None,
 ):
     lookup = {
         "recommendationType": recommendation_type,
@@ -754,6 +1439,8 @@ def _upsert_recommendation(
         match_score,
         explanation,
         risk_flags,
+        score_breakdown,
+        graph_evidence,
     )
 
     doc_id = existing["id"] if existing else _recommendation_document_id(
@@ -763,10 +1450,10 @@ def _upsert_recommendation(
     document_payload = {"id": doc_id, **payload}
     ref.set(document_payload, merge=bool(existing))
 
-    response = {"id": doc_id, **payload}
+    response = {"id": doc_id, **{key: value for key, value in payload.items() if key not in {"createdAt", "updatedAt"}}}
     if existing and "createdAt" in existing:
         response["createdAt"] = existing["createdAt"]
-    return response
+    return _sanitize(response)
 
 
 def _find_existing_relationship(
@@ -825,6 +1512,75 @@ def _create_relationship(db, recommendation: dict, expected_outcome: str) -> str
     return doc_id
 
 
+def _materialize_graph_edges_for_approval(db, recommendation: dict, relationship_id: str | None = None):
+    rec_type = recommendation["recommendationType"]
+    programme_id = recommendation["programmeId"]
+
+    if rec_type == "Startup-to-Programme":
+        upsert_graph_edge(
+            db,
+            "Startup",
+            recommendation["sourceEntityId"],
+            "APPLIED_TO",
+            "Programme",
+            recommendation["targetEntityId"],
+            programme_id=programme_id,
+            created_from="recommendations",
+            created_from_id=recommendation["id"],
+        )
+        upsert_graph_edge(
+            db,
+            "Startup",
+            recommendation["sourceEntityId"],
+            "ACCEPTED_INTO",
+            "Programme",
+            recommendation["targetEntityId"],
+            programme_id=programme_id,
+            created_from="recommendations",
+            created_from_id=recommendation["id"],
+        )
+    elif rec_type.endswith("-to-Programme"):
+        upsert_graph_edge(
+            db,
+            "Contributor",
+            recommendation["sourceEntityId"],
+            "ATTACHED_TO",
+            "Programme",
+            recommendation["targetEntityId"],
+            programme_id=programme_id,
+            created_from="recommendations",
+            created_from_id=recommendation["id"],
+            metadata={"contributorType": rec_type.replace("-to-Programme", "")},
+        )
+    elif rec_type == "Startup-to-Mentor":
+        upsert_graph_edge(
+            db,
+            "Startup",
+            recommendation["sourceEntityId"],
+            "MATCHED_WITH",
+            "Contributor",
+            recommendation["targetEntityId"],
+            programme_id=programme_id,
+            created_from="recommendations",
+            created_from_id=recommendation["id"],
+        )
+
+    if relationship_id:
+        relationship_doc = db.collection("relationships").document(relationship_id).get()
+        if relationship_doc.exists and relationship_doc.to_dict().get("relationshipType") == "Startup-to-Programme":
+            upsert_graph_edge(
+                db,
+                "Relationship",
+                relationship_id,
+                "MATCHED_WITH",
+                "Programme",
+                programme_id,
+                programme_id=programme_id,
+                created_from="relationships",
+                created_from_id=relationship_id,
+            )
+
+
 def _get_accepted_application(db, startup_id: str, programme_id: str):
     return _find_one_by_fields(
         db,
@@ -880,12 +1636,13 @@ def recommend_programmes_for_startup(req: https_fn.CallableRequest):
     db = _init_firebase()
     data = _require_data(req)
     startup_id = _require_string(data, "startupId")
+    print(f"recommend_programmes_for_startup:start startupId={startup_id}")
 
     startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
     startup = startup_doc.to_dict()
     startup_embedding = _ensure_embedding("companies", startup_id, startup, _build_startup_text)
 
-    recommendations = []
+    candidates = []
     for programme_doc in db.collection("programmes").stream():
         programme = programme_doc.to_dict()
         if programme.get("status") not in ["Open", "Active"]:
@@ -893,28 +1650,79 @@ def recommend_programmes_for_startup(req: https_fn.CallableRequest):
 
         programme_embedding = _ensure_embedding("programmes", programme_doc.id, programme, _build_programme_text)
         similarity = cosine_similarity(startup_embedding, programme_embedding)
-        score, risks = _startup_programme_score(startup, programme, similarity)
+        semantic_score = _similarity_score(similarity)
+        rule_score, rule_risks, rule_breakdown = _startup_programme_rule_score(startup, programme)
+        graph_context = get_startup_programme_graph_context(db, startup_id, programme_doc.id)
+        graph_result = calculate_graph_score(graph_context, "Startup-to-Programme")
+        score = _graph_blended_total(rule_score, semantic_score, graph_result["graphScore"])
         if score < STARTUP_PROGRAMME_THRESHOLD:
             continue
 
-        explanation = _generate_explanation(
-            "Startup-to-Programme recommendation",
-            {"startup": startup, "programme": programme, "score": score, "risks": risks},
+        candidates.append(
+            {
+                "programme": programme,
+                "programmeId": programme_doc.id,
+                "score": score,
+                "ruleScore": rule_score,
+                "semanticScore": semantic_score,
+                "graphScore": graph_result["graphScore"],
+                "graphContext": graph_context,
+                "ruleRisks": rule_risks,
+                "graphRisks": graph_result["riskFlags"],
+                "ruleBreakdown": rule_breakdown,
+                "graphBreakdown": graph_result["breakdown"],
+            }
         )
+
+    print(f"recommend_programmes_for_startup:candidates={len(candidates)}")
+
+    recommendations = []
+    for candidate in sorted(candidates, key=lambda item: item["score"], reverse=True)[:MAX_RECOMMENDATIONS_PER_CALL]:
+        print(f"recommend_programmes_for_startup:explaining programmeId={candidate['programmeId']} score={candidate['score']}")
+        score_breakdown = {
+            "ruleScore": candidate["ruleScore"],
+            "semanticScore": candidate["semanticScore"],
+            "graphScore": candidate["graphScore"],
+            "finalScore": candidate["score"],
+            "ruleBreakdown": candidate["ruleBreakdown"],
+            "graphBreakdown": candidate["graphBreakdown"],
+        }
+        combined_risks = list(dict.fromkeys(candidate["ruleRisks"] + candidate["graphRisks"]))
+        explanation_payload = _generate_graph_explanation(
+            "Startup-to-Programme recommendation",
+            {
+                "startup": startup,
+                "programme": candidate["programme"],
+                "scoreBreakdown": score_breakdown,
+                "graphContext": candidate["graphContext"],
+                "riskFlags": combined_risks,
+            },
+        )
+        combined_risks = list(dict.fromkeys(combined_risks + explanation_payload["riskFlags"]))
+        graph_evidence = {
+            "summary": explanation_payload["summary"],
+            "edges": explanation_payload["edges"],
+            "pastOutcomeSignals": explanation_payload["pastOutcomeSignals"],
+            "riskFlags": combined_risks,
+        }
         recommendation = _upsert_recommendation(
             db,
             "Startup-to-Programme",
             "Startup",
             startup_id,
             "Programme",
-            programme_doc.id,
-            programme_doc.id,
-            score,
-            explanation,
-            risks,
+            candidate["programmeId"],
+            candidate["programmeId"],
+            candidate["score"],
+            explanation_payload["summary"],
+            combined_risks,
+            score_breakdown,
+            graph_evidence,
         )
         recommendations.append(recommendation)
+        print(f"recommend_programmes_for_startup:upserted programmeId={candidate['programmeId']}")
 
+    print(f"recommend_programmes_for_startup:done recommendations={len(recommendations)}")
     return {"recommendations": recommendations}
 
 
@@ -943,20 +1751,42 @@ def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
 
         programme_embedding = _ensure_embedding("programmes", programme_doc.id, programme, _build_programme_text)
         similarity = cosine_similarity(contributor_embedding, programme_embedding)
-        score, risks, contributor_type = _contributor_programme_score(contributor, programme, similarity)
+        semantic_score = _similarity_score(similarity)
+        rule_score, rule_risks, contributor_type, rule_breakdown = _contributor_programme_rule_score(contributor, programme)
+        graph_context = get_contributor_programme_graph_context(db, contributor_id, programme_doc.id)
+        graph_result = calculate_graph_score(graph_context, f"{contributor_type}-to-Programme")
+        score = _graph_blended_total(rule_score, semantic_score, graph_result["graphScore"])
         if score < CONTRIBUTOR_PROGRAMME_THRESHOLD:
             continue
 
-        explanation = _generate_explanation(
+        score_breakdown = {
+            "ruleScore": rule_score,
+            "semanticScore": semantic_score,
+            "graphScore": graph_result["graphScore"],
+            "finalScore": score,
+            "ruleBreakdown": rule_breakdown,
+            "graphBreakdown": graph_result["breakdown"],
+        }
+        combined_risks = list(dict.fromkeys(rule_risks + graph_result["riskFlags"]))
+        explanation_payload = _generate_graph_explanation(
             "Contributor-to-Programme recommendation",
             {
                 "contributor": contributor,
+                "target": programme,
                 "programme": programme,
                 "recommendationType": f"{contributor_type}-to-Programme",
-                "score": score,
-                "risks": risks,
+                "scoreBreakdown": score_breakdown,
+                "graphContext": graph_context,
+                "riskFlags": combined_risks,
             },
         )
+        combined_risks = list(dict.fromkeys(combined_risks + explanation_payload["riskFlags"]))
+        graph_evidence = {
+            "summary": explanation_payload["summary"],
+            "edges": explanation_payload["edges"],
+            "pastOutcomeSignals": explanation_payload["pastOutcomeSignals"],
+            "riskFlags": combined_risks,
+        }
         recommendation = _upsert_recommendation(
             db,
             f"{contributor_type}-to-Programme",
@@ -966,8 +1796,10 @@ def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
             programme_doc.id,
             programme_doc.id,
             score,
-            explanation,
-            risks,
+            explanation_payload["summary"],
+            combined_risks,
+            score_breakdown,
+            graph_evidence,
         )
         recommendations.append(recommendation)
 
@@ -1014,14 +1846,43 @@ def recommend_mentor_for_startup(req: https_fn.CallableRequest):
 
         contributor_embedding = _ensure_embedding("contributors", contributor_id, contributor, _build_contributor_text)
         similarity = cosine_similarity(startup_embedding, contributor_embedding)
-        score, risks = _startup_mentor_score(startup, contributor, programme, similarity)
+        semantic_score = _similarity_score(similarity)
+        rule_score, rule_risks, rule_breakdown = _startup_mentor_rule_score(startup, contributor, programme)
+        graph_context = get_startup_mentor_graph_context(db, startup_id, contributor_id, programme_id)
+        graph_result = calculate_graph_score(graph_context, "Startup-to-Mentor")
+        if graph_result["hardReject"]:
+            continue
+        score = _graph_blended_total(rule_score, semantic_score, graph_result["graphScore"])
         if score < MENTOR_RECOMMENDATION_THRESHOLD:
             continue
 
-        explanation = _generate_explanation(
+        score_breakdown = {
+            "ruleScore": rule_score,
+            "semanticScore": semantic_score,
+            "graphScore": graph_result["graphScore"],
+            "finalScore": score,
+            "ruleBreakdown": rule_breakdown,
+            "graphBreakdown": graph_result["breakdown"],
+        }
+        combined_risks = list(dict.fromkeys(rule_risks + graph_result["riskFlags"]))
+        explanation_payload = _generate_graph_explanation(
             "Startup-to-Mentor recommendation inside an approved programme",
-            {"startup": startup, "programme": programme, "contributor": contributor, "score": score, "risks": risks},
+            {
+                "startup": startup,
+                "target": contributor,
+                "programme": programme,
+                "scoreBreakdown": score_breakdown,
+                "graphContext": graph_context,
+                "riskFlags": combined_risks,
+            },
         )
+        combined_risks = list(dict.fromkeys(combined_risks + explanation_payload["riskFlags"]))
+        graph_evidence = {
+            "summary": explanation_payload["summary"],
+            "edges": explanation_payload["edges"],
+            "pastOutcomeSignals": explanation_payload["pastOutcomeSignals"],
+            "riskFlags": combined_risks,
+        }
         recommendation = _upsert_recommendation(
             db,
             "Startup-to-Mentor",
@@ -1031,8 +1892,10 @@ def recommend_mentor_for_startup(req: https_fn.CallableRequest):
             contributor_id,
             programme_id,
             score,
-            explanation,
-            risks,
+            explanation_payload["summary"],
+            combined_risks,
+            score_breakdown,
+            graph_evidence,
         )
         recommendations.append(recommendation)
 
@@ -1083,6 +1946,7 @@ def review_recommendation(req: https_fn.CallableRequest):
             created_id = _create_relationship(db, recommendation, "Contributor attached to the programme pool.")
         elif rec_type == "Startup-to-Mentor":
             created_id = _create_relationship(db, recommendation, "Mentor guidance for programme milestones.")
+        _materialize_graph_edges_for_approval(db, recommendation, created_id)
 
     return {"success": True, "recommendationId": recommendation_id, "decision": decision, "createdId": created_id}
 
@@ -1150,7 +2014,13 @@ def submit_outcome(req: https_fn.CallableRequest):
 
     Return one sentence only.
     """
-    lesson = _generate_text("gemini-3.1-flash-lite", lesson_prompt)
+    if _has_gemini_api_key():
+        lesson = _generate_text("gemini-3.1-flash-lite", lesson_prompt)
+    else:
+        lesson = (
+            f"Reuse programme context and capacity checks for similar {relationship.get('relationshipType', 'relationship').lower()} "
+            f"cases; this outcome was marked {outcome_achieved.lower()}."
+        )
 
     quality_average = (startup_rating + contributor_rating) / 2
     outcome = {
@@ -1185,6 +2055,19 @@ def submit_outcome(req: https_fn.CallableRequest):
             {"status": "Completed", "updatedAt": firestore.SERVER_TIMESTAMP}
         )
 
+    upsert_graph_edge(
+        db,
+        "Relationship",
+        relationship_id,
+        "PRODUCED_OUTCOME",
+        "Outcome",
+        outcome_id,
+        programme_id=relationship.get("programmeId"),
+        created_from="outcomes",
+        created_from_id=outcome_id,
+        metadata={"outcomeAchieved": outcome_achieved, "reusePattern": outcome["reusePattern"]},
+    )
+
     return {"success": True, "outcomeId": outcome_id, "aiLesson": lesson}
 
 
@@ -1198,6 +2081,108 @@ def _summary_prompt(startup: dict) -> str:
     """
 
 
+def _build_profile_fallback(entity: dict[str, Any], entity_label: str) -> dict[str, Any]:
+    name = entity.get("name") or entity.get("companyName") or f"This {entity_label}"
+    industry = entity.get("industry") or entity.get("sector") or "unknown sector"
+    stage = entity.get("stage") or "unknown stage"
+    country = entity.get("country") or "an unspecified country"
+    support_needs = list(entity.get("supportNeeds", []))
+    tokens = _tokenize(" ".join([str(name), str(industry), str(stage), str(country), " ".join(support_needs)]))
+
+    suggested_programmes = []
+    if stage in {"Idea", "Pre-seed", "Seed", "MVP"}:
+        suggested_programmes.append("Accelerator")
+    if {"fintech", "payments", "regulatory"} & tokens:
+        suggested_programmes.append("Market Access Programme")
+    if {"health", "med", "clinical", "healthtech"} & tokens:
+        suggested_programmes.append("Healthcare Accelerator")
+    if not suggested_programmes:
+        suggested_programmes.append("Mentorship Cohort")
+
+    risk_flags = []
+    if entity.get("verificationStatus") != "Verified":
+        risk_flags.append("Startup profile is not verified yet.")
+    if not entity.get("productDescription"):
+        risk_flags.append("Startup profile does not show a clear product or prototype.")
+    if not support_needs:
+        risk_flags.append("Startup support needs are not fully articulated.")
+
+    completeness = 65.0
+    if entity.get("productDescription"):
+        completeness += 15.0
+    if entity.get("verificationStatus") == "Verified":
+        completeness += 10.0
+    if support_needs:
+        completeness += 5.0
+
+    readiness = 5.0
+    if stage in {"MVP", "Seed", "Growth"}:
+        readiness += 1.5
+    if entity.get("productDescription"):
+        readiness += 1.5
+    if entity.get("verificationStatus") == "Verified":
+        readiness += 1.0
+    if support_needs:
+        readiness += 0.5
+
+    return {
+        "summary": (
+            f"{name} is a {stage} {industry} startup in {country} seeking "
+            f"{', '.join(support_needs[:3]) if support_needs else 'programme support'}."
+        ),
+        "autoTags": [item for item in [industry, stage, country, *support_needs[:3]] if item],
+        "suggestedProgrammeTypes": suggested_programmes,
+        "riskFlags": risk_flags or ["Profile is broadly suitable for programme matching."],
+        "profileCompletenessScore": round(min(completeness, 100.0), 2),
+        "readinessScore": round(min(readiness, 10.0), 2),
+    }
+
+
+def _build_ai_insights_fallback(stats: dict[str, Any]) -> list[dict[str, str]]:
+    top_gap = max(
+        stats.get("programmeGraphGaps", []),
+        key=lambda item: (len(item.get("gaps", [])), item.get("counts", {}).get("acceptedStartups", 0)),
+        default=None,
+    )
+    return [
+        {
+            "type": "programme_supply_gap",
+            "title": "Programme supply gap",
+            "description": (
+                top_gap["gaps"][0]["summary"]
+                if top_gap and top_gap.get("gaps")
+                else "Current programme coverage is broadly aligned with accepted startup demand."
+            ),
+            "severity": "high" if top_gap and top_gap.get("gaps") else "low",
+        },
+        {
+            "type": "mentor_capacity_warning",
+            "title": "Mentor capacity watch",
+            "description": (
+                f"{len(stats.get('lowCapacityMentors', []))} mentors are operating near capacity."
+                if stats.get("lowCapacityMentors")
+                else "No immediate mentor capacity bottleneck detected."
+            ),
+            "severity": "medium" if stats.get("lowCapacityMentors") else "low",
+        },
+        {
+            "type": "reusable_outcome_pattern",
+            "title": "Reusable outcome pattern",
+            "description": (
+                f"{stats.get('successfulOutcomes', 0)} of {stats.get('totalOutcomes', 0)} outcomes are marked successful, "
+                "so those programme and relationship patterns should be reused first."
+            ),
+            "severity": "medium" if stats.get("successfulOutcomes", 0) else "low",
+        },
+        {
+            "type": "admin_recommendation",
+            "title": "Admin action",
+            "description": "Use graph evidence when approving recommendations and watch programmes with repeated capacity gaps.",
+            "severity": "medium",
+        },
+    ]
+
+
 @https_fn.on_call()
 def summarise_startup_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
@@ -1206,7 +2191,13 @@ def summarise_startup_profile(req: https_fn.CallableRequest):
 
     startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
     startup = startup_doc.to_dict()
-    profile = _generate_json_payload("gemini-3.1-flash-lite", _summary_prompt(startup), dict, _normalise_profile_payload)
+    try:
+        if _has_gemini_api_key() and not _running_in_firestore_emulator():
+            profile = _generate_json_payload("gemini-3.1-flash-lite", _summary_prompt(startup), dict, _normalise_profile_payload)
+        else:
+            raise RuntimeError("fallback")
+    except Exception:
+        profile = _build_profile_fallback(startup, "startup")
     return {"startupId": startup_id, "profile": profile}
 
 
@@ -1218,8 +2209,32 @@ def summarise_company_profile(req: https_fn.CallableRequest):
 
     startup_doc = _get_document_or_error(db, "companies", company_id, "Startup")
     startup = startup_doc.to_dict()
-    profile = _generate_json_payload("gemini-3.1-flash-lite", _summary_prompt(startup), dict, _normalise_profile_payload)
+    try:
+        if _has_gemini_api_key() and not _running_in_firestore_emulator():
+            profile = _generate_json_payload("gemini-3.1-flash-lite", _summary_prompt(startup), dict, _normalise_profile_payload)
+        else:
+            raise RuntimeError("fallback")
+    except Exception:
+        profile = _build_profile_fallback(startup, "company")
     return {"startupId": company_id, "profile": profile}
+
+
+@https_fn.on_call()
+def get_programme_graph_view(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    data = _require_data(req)
+    programme_id = _require_string(data, "programmeId")
+    subgraph = get_programme_subgraph(db, programme_id)
+    graph_insights = _programme_graph_gaps(subgraph)
+    return {
+        "programme": subgraph["programme"],
+        "counts": subgraph["counts"],
+        "graphEvidence": {
+            "edges": [_edge_evidence_text(edge) for edge in subgraph["edges"][:8]],
+            "pastOutcomeSignals": subgraph["positiveOutcomeSignals"][:4],
+        },
+        "graphInsights": graph_insights,
+    }
 
 
 @https_fn.on_call()
@@ -1235,6 +2250,18 @@ def get_ai_insights(req: https_fn.CallableRequest):
     recommendations = [doc.to_dict() for doc in db.collection("recommendations").stream()]
     relationships = [doc.to_dict() for doc in db.collection("relationships").stream()]
     outcomes = [doc.to_dict() for doc in db.collection("outcomes").stream()]
+    graph_edges = [doc.to_dict() for doc in db.collection("graph_edges").stream()]
+    programme_graph_gaps = []
+    for programme in programmes:
+        subgraph = get_programme_subgraph(db, programme["id"])
+        programme_graph_gaps.append(
+            {
+                "programmeId": programme["id"],
+                "programmeName": programme["name"],
+                "counts": subgraph["counts"],
+                "gaps": _programme_graph_gaps(subgraph),
+            }
+        )
 
     stats = {
         "totalOrganisations": len([doc.to_dict() for doc in db.collection("organisations").stream()]),
@@ -1249,9 +2276,11 @@ def get_ai_insights(req: https_fn.CallableRequest):
         "completedRelationships": len([rel for rel in relationships if rel.get("status") == "Completed"]),
         "totalOutcomes": len(outcomes),
         "successfulOutcomes": len([outcome for outcome in outcomes if outcome.get("outcomeAchieved") == "Yes"]),
+        "graphEdges": len(graph_edges),
         "startupSupportNeeds": {},
         "programmeOutcomeDemand": {},
         "lowCapacityMentors": [],
+        "programmeGraphGaps": programme_graph_gaps,
     }
 
     for startup in startups:
@@ -1278,25 +2307,30 @@ def get_ai_insights(req: https_fn.CallableRequest):
         for outcome in outcomes[:40]
     ]
 
-    prompt = f"""
-    You are the AI ecosystem analyst for Lattice, a programme-first startup relationship orchestration platform.
-    Review these ecosystem statistics:
-    {json.dumps(stats, indent=2)}
+    if _has_gemini_api_key():
+        prompt = f"""
+        You are the AI ecosystem analyst for Lattice, a programme-first startup relationship orchestration platform.
+        Review these ecosystem statistics:
+        {json.dumps(stats, indent=2)}
 
-    Outcome history sample:
-    {json.dumps(outcome_context, indent=2)}
+        Outcome history sample:
+        {json.dumps(outcome_context, indent=2)}
 
-    Return ONLY a JSON array with exactly 4 objects. Each object must include:
-    type, title, description, severity.
+        Return ONLY a JSON array with exactly 4 objects. Each object must include:
+        type, title, description, severity.
 
-    Cover:
-    1. a programme supply-demand gap
-    2. a mentor capacity warning
-    3. a reusable outcome pattern grounded in the outcome history
-    4. a strategic recommendation for organisation admins
-    """
-
-    insights = _generate_json_payload("gemini-3.1-flash-lite", prompt, list, _normalise_insights_payload)
+        Cover:
+        1. a programme supply-demand gap
+        2. a mentor capacity warning
+        3. a reusable outcome pattern grounded in the outcome history
+        4. a strategic recommendation for organisation admins
+        """
+        try:
+            insights = _generate_json_payload("gemini-3.1-flash-lite", prompt, list, _normalise_insights_payload)
+        except Exception:
+            insights = _build_ai_insights_fallback(stats)
+    else:
+        insights = _build_ai_insights_fallback(stats)
     return {"insights": insights, "stats": stats}
 
 

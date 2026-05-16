@@ -51,6 +51,12 @@ export default function InsightsPage() {
               <strong>{outcomes.length} recorded outcomes</strong>
               <span>Each completed relationship adds more evidence for future recommendation quality.</span>
             </div>
+            {stats ? (
+              <div className="hero-chip">
+                <strong>{stats.graphEdges || 0} graph edges</strong>
+                <span>The materialized graph layer now feeds retrieval, ranking, and evidence panels.</span>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -106,6 +112,32 @@ export default function InsightsPage() {
           </div>
         </div>
       )}
+
+      {stats?.programmeGraphGaps?.length ? (
+        <div className="card" style={{ marginBottom: 28 }}>
+          <div className="card-header">
+            <h3>Programme Graph Gaps</h3>
+          </div>
+          <div className="stack-list">
+            {stats.programmeGraphGaps.slice(0, 6).map((programme) => (
+              <div key={programme.programmeId} className="stack-item recommendation-item">
+                <div className="stack-item-header">
+                  <div className="stack-item-title">{programme.programmeName}</div>
+                  <Badge variant="gray">{programme.counts?.graphEdges || 0} edges</Badge>
+                </div>
+                {(programme.gaps || []).slice(0, 2).map((gap) => (
+                  <div key={`${programme.programmeId}-${gap.summary}`} style={{ marginTop: 8 }}>
+                    <p style={{ fontSize: 13, marginBottom: 4 }}>
+                      <strong>{gap.severity.toUpperCase()}</strong> {gap.summary}
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{gap.suggestedAction}</p>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="card">
         <div className="card-header">

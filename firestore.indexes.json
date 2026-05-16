@@ -53,6 +53,30 @@
         { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
         { "fieldPath": "programmeId", "mode": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sourceId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

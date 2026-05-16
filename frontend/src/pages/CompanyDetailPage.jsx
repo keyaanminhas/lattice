@@ -3,7 +3,7 @@ import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firesto
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
-import { Badge, ScoreBadge, StarRating, StatusPill, Spinner } from '../components/Shared';
+import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StarRating, StatusPill, Spinner } from '../components/Shared';
 
 export default function CompanyDetailPage() {
   const { id } = useParams();
@@ -300,6 +300,8 @@ export default function CompanyDetailPage() {
                     <ScoreBadge score={item.matchScore} label="Programme fit" />
                   </div>
                   <div className="stack-item-copy">{item.explanation}</div>
+                  <ScoreBreakdown breakdown={item.scoreBreakdown} />
+                  <GraphEvidence evidence={item.graphEvidence} />
                   <div className="recommendation-meta">
                     <StatusPill status={item.status} />
                   </div>
@@ -324,6 +326,8 @@ export default function CompanyDetailPage() {
                     <ScoreBadge score={item.matchScore} label="Mentor fit" />
                   </div>
                   <div className="stack-item-copy">{item.explanation}</div>
+                  <ScoreBreakdown breakdown={item.scoreBreakdown} />
+                  <GraphEvidence evidence={item.graphEvidence} />
                   <div className="recommendation-meta">
                     <StatusPill status={item.status} />
                   </div>

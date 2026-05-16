@@ -55,6 +55,48 @@ import main  # noqa: E402
 
 
 class BackendLogicTests(unittest.TestCase):
+    class FakeSnapshot:
+        def __init__(self, payload=None):
+            self._payload = payload
+            self.exists = payload is not None
+
+        def to_dict(self):
+            return self._payload
+
+        @property
+        def id(self):
+            return self._payload.get("id") if self._payload else None
+
+    class FakeDocumentRef:
+        def __init__(self, store, doc_id):
+            self.store = store
+            self.doc_id = doc_id
+
+        def get(self):
+            return BackendLogicTests.FakeSnapshot(self.store.get(self.doc_id))
+
+        def set(self, payload, merge=False):
+            if merge and self.doc_id in self.store:
+                current = dict(self.store[self.doc_id])
+                current.update(payload)
+                self.store[self.doc_id] = current
+            else:
+                self.store[self.doc_id] = dict(payload)
+
+    class FakeCollection:
+        def __init__(self, store):
+            self.store = store
+
+        def document(self, doc_id):
+            return BackendLogicTests.FakeDocumentRef(self.store, doc_id)
+
+    class FakeDb:
+        def __init__(self):
+            self.collections = {"graph_edges": {}}
+
+        def collection(self, name):
+            return BackendLogicTests.FakeCollection(self.collections.setdefault(name, {}))
+
     def test_extract_json_payload_handles_fenced_json(self):
         raw = """```json
         {"summary": "ok"}
@@ -106,6 +148,65 @@ class BackendLogicTests(unittest.TestCase):
     def test_insight_normaliser_requires_exactly_four_items(self):
         with self.assertRaises(ValueError):
             main._normalise_insights_payload([{"type": "gap"}])
+
+    def test_graph_edge_document_id_is_deterministic(self):
+        left = main._graph_edge_document_id("Contributor", "cont-1", "ATTACHED_TO", "Programme", "prog-2")
+        right = main._graph_edge_document_id("Contributor", "cont-1", "ATTACHED_TO", "Programme", "prog-2")
+        self.assertEqual(left, right)
+
+    def test_upsert_graph_edge_is_idempotent(self):
+        db = self.FakeDb()
+        edge = main.upsert_graph_edge(
+            db,
+            "Contributor",
+            "cont-1",
+            "ATTACHED_TO",
+            "Programme",
+            "prog-2",
+            programme_id="prog-2",
+            metadata={"contributorType": "Mentor"},
+        )
+        main.upsert_graph_edge(
+            db,
+            "Contributor",
+            "cont-1",
+            "ATTACHED_TO",
+            "Programme",
+            "prog-2",
+            programme_id="prog-2",
+            metadata={"contributorType": "Mentor"},
+        )
+        self.assertEqual(len(db.collections["graph_edges"]), 1)
+        self.assertEqual(edge["id"], "Contributor__cont-1__ATTACHED_TO__Programme__prog-2")
+
+    def test_graph_explanation_normaliser_rejects_invalid_shape(self):
+        with self.assertRaises(ValueError):
+            main._normalise_graph_explanation_payload({"summary": "ok"})
+
+    def test_startup_programme_graph_score_produces_breakdown(self):
+        context = {
+            "startup": {"supportNeeds": ["Clinical pilot access", "Regulatory guidance"]},
+            "subgraph": {"counts": {"acceptedStartups": 3, "activeMentorRelationships": 2, "attachedMentors": 2, "attachedPartners": 1, "attachedInvestors": 1, "attachedServiceProviders": 1}},
+            "resourceTokens": ["clinical", "pilot", "regulatory", "guidance"],
+            "evidenceEdges": ["Contributor cont-1 ATTACHED_TO Programme prog-2"],
+            "pastOutcomeSignals": ["Prior outcome signal"],
+        }
+        result = main.calculate_graph_score(context, "Startup-to-Programme")
+        self.assertIn("resourceCoverage", result["breakdown"])
+        self.assertGreater(result["graphScore"], 0)
+
+    def test_startup_mentor_graph_score_hard_rejects_conflict(self):
+        context = {
+            "startup": {"id": "comp-1", "supportNeeds": ["Clinical pilot access"]},
+            "mentor": {"id": "cont-1", "availability": "Available", "expertise": ["Clinical Pilots"]},
+            "subgraph": {"pools": [], "acceptedApplications": [], "relationships": []},
+            "conflictEdges": [{"id": "edge-1"}],
+            "evidenceEdges": [],
+            "pastOutcomeSignals": [],
+        }
+        result = main.calculate_graph_score(context, "Startup-to-Mentor")
+        self.assertTrue(result["hardReject"])
+        self.assertEqual(result["rejectReason"], "Explicit conflict edge detected.")
 
 
 if __name__ == "__main__":

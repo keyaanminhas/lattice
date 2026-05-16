@@ -1,19 +1,32 @@
 import os
 
 import firebase_admin
-from firebase_admin import firestore
+from firebase_admin import firestore as admin_firestore
+from google.cloud import firestore as google_firestore
 
-if os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}:
+USE_FIRESTORE_EMULATOR = os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}
+
+if USE_FIRESTORE_EMULATOR:
     os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"
 
-try:
-    firebase_admin.initialize_app()
-except ValueError:
-    pass
+if USE_FIRESTORE_EMULATOR:
+    from google.auth.credentials import AnonymousCredentials
 
-db = firestore.client()
+    db = google_firestore.Client(
+        project=os.environ.get("GOOGLE_CLOUD_PROJECT", "lattice-2026"),
+        credentials=AnonymousCredentials(),
+    )
+    SERVER_TIMESTAMP = google_firestore.SERVER_TIMESTAMP
+else:
+    try:
+        firebase_admin.initialize_app()
+    except ValueError:
+        pass
+    db = admin_firestore.client()
+    SERVER_TIMESTAMP = admin_firestore.SERVER_TIMESTAMP
 
 MANAGED_COLLECTIONS = [
+    "graph_edges",
     "outcomes",
     "relationships",
     "recommendations",
@@ -28,14 +41,14 @@ MANAGED_COLLECTIONS = [
 
 def _with_created(record: dict) -> dict:
     payload = dict(record)
-    payload["createdAt"] = firestore.SERVER_TIMESTAMP
+    payload["createdAt"] = SERVER_TIMESTAMP
     return payload
 
 
 def _with_created_updated(record: dict) -> dict:
     payload = dict(record)
-    payload["createdAt"] = firestore.SERVER_TIMESTAMP
-    payload["updatedAt"] = firestore.SERVER_TIMESTAMP
+    payload["createdAt"] = SERVER_TIMESTAMP
+    payload["updatedAt"] = SERVER_TIMESTAMP
     return payload
 
 
@@ -224,6 +237,8 @@ def recommendation(
     explanation: str,
     risks: list[str],
     status: str,
+    score_breakdown: dict | None = None,
+    graph_evidence: dict | None = None,
 ):
     return _with_created_updated(
         {
@@ -237,6 +252,20 @@ def recommendation(
             "matchScore": score,
             "explanation": explanation,
             "riskFlags": risks,
+            "scoreBreakdown": score_breakdown
+            or {
+                "ruleScore": score,
+                "semanticScore": score,
+                "graphScore": score,
+                "finalScore": score,
+            },
+            "graphEvidence": graph_evidence
+            or {
+                "summary": explanation,
+                "edges": [],
+                "pastOutcomeSignals": [],
+                "riskFlags": risks,
+            },
             "status": status,
         }
     )
@@ -296,6 +325,40 @@ def outcome(
             "adminEvaluation": admin_evaluation,
             "aiLesson": ai_lesson,
             "reusePattern": reuse_pattern,
+        }
+    )
+
+
+def graph_edge(
+    source_type: str,
+    source_id: str,
+    edge_type: str,
+    target_type: str,
+    target_id: str,
+    programme_id: str | None = None,
+    status: str = "active",
+    weight: float = 1.0,
+    confidence: float = 1.0,
+    created_from: str = "",
+    created_from_id: str = "",
+    metadata: dict | None = None,
+):
+    doc_id = f"{source_type}__{source_id}__{edge_type}__{target_type}__{target_id}"
+    return _with_created_updated(
+        {
+            "id": doc_id,
+            "sourceType": source_type,
+            "sourceId": source_id,
+            "edgeType": edge_type,
+            "targetType": target_type,
+            "targetId": target_id,
+            "programmeId": programme_id,
+            "status": status,
+            "weight": weight,
+            "confidence": confidence,
+            "createdFrom": created_from,
+            "createdFromId": created_from_id,
+            "metadata": metadata or {},
         }
     )
 
@@ -1547,6 +1610,97 @@ def build_seed_data():
         ),
     ]
 
+    graph_edges = []
+    for organisation_data in organisations:
+        for programme_data in programmes:
+            if programme_data["organisationId"] == organisation_data["id"]:
+                graph_edges.append(
+                    graph_edge(
+                        "Organisation",
+                        organisation_data["id"],
+                        "OWNS",
+                        "Programme",
+                        programme_data["id"],
+                        programme_id=programme_data["id"],
+                        created_from="programmes",
+                        created_from_id=programme_data["id"],
+                    )
+                )
+
+    for application_data in applications:
+        graph_edges.append(
+            graph_edge(
+                "Startup",
+                application_data["startupId"],
+                "APPLIED_TO",
+                "Programme",
+                application_data["programmeId"],
+                programme_id=application_data["programmeId"],
+                created_from="applications",
+                created_from_id=application_data["id"],
+            )
+        )
+        if application_data["status"] == "Accepted":
+            graph_edges.append(
+                graph_edge(
+                    "Startup",
+                    application_data["startupId"],
+                    "ACCEPTED_INTO",
+                    "Programme",
+                    application_data["programmeId"],
+                    programme_id=application_data["programmeId"],
+                    created_from="applications",
+                    created_from_id=application_data["id"],
+                )
+            )
+
+    for pool in programme_contributors:
+        graph_edges.append(
+            graph_edge(
+                "Contributor",
+                pool["contributorId"],
+                "ATTACHED_TO",
+                "Programme",
+                pool["programmeId"],
+                programme_id=pool["programmeId"],
+                created_from="programmeContributors",
+                created_from_id=pool["id"],
+                metadata={"contributorType": pool["contributorType"]},
+            )
+        )
+
+    relationship_map = {item["id"]: item for item in relationships}
+    for relationship_data in relationships:
+        if relationship_data["relationshipType"] == "Startup-to-Mentor":
+            graph_edges.append(
+                graph_edge(
+                    "Startup",
+                    relationship_data["sourceEntityId"],
+                    "MATCHED_WITH",
+                    "Contributor",
+                    relationship_data["targetEntityId"],
+                    programme_id=relationship_data["programmeId"],
+                    created_from="relationships",
+                    created_from_id=relationship_data["id"],
+                )
+            )
+
+    for outcome_data in outcomes:
+        relationship_data = relationship_map.get(outcome_data["relationshipId"])
+        graph_edges.append(
+            graph_edge(
+                "Relationship",
+                outcome_data["relationshipId"],
+                "PRODUCED_OUTCOME",
+                "Outcome",
+                outcome_data["id"],
+                programme_id=relationship_data["programmeId"] if relationship_data else None,
+                created_from="outcomes",
+                created_from_id=outcome_data["id"],
+                metadata={"outcomeAchieved": outcome_data["outcomeAchieved"], "reusePattern": outcome_data["reusePattern"]},
+            )
+        )
+
     return {
         "organisations": organisations,
         "programmes": programmes,
@@ -1557,6 +1711,7 @@ def build_seed_data():
         "recommendations": recommendations,
         "relationships": relationships,
         "outcomes": outcomes,
+        "graph_edges": graph_edges,
     }
 
 

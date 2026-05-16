@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
-import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
 
 export default function MatchesPage() {
   const [recommendations, setRecommendations] = useState([]);
@@ -129,12 +129,14 @@ export default function MatchesPage() {
                 <span className="meta-term">Target</span>
                 <span>{startups[item.targetEntityId] || contributors[item.targetEntityId] || programmes[item.targetEntityId] || item.targetEntityId}</span>
               </div>
+              <ScoreBreakdown breakdown={item.scoreBreakdown} />
               <p className="recommendation-copy">{item.explanation}</p>
               {item.riskFlags?.length ? (
                 <div className="recommendation-meta">
                   {item.riskFlags.map((flag) => <Badge key={flag} variant="red">{flag}</Badge>)}
                 </div>
               ) : null}
+              <GraphEvidence evidence={item.graphEvidence} />
               {item.status === 'Pending Approval' ? (
                 <div className="recommendation-actions">
                   <button className="btn btn-sm btn-success" onClick={() => handleDecision(item.id, 'Approved')}>
