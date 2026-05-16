@@ -21,8 +21,8 @@ import SettingsPage from './pages/SettingsPage';
 import CreateProgrammePage from './pages/CreateProgrammePage';
 import OutcomesPage from './pages/OutcomesPage';
 import FeatureGuidePage from './pages/FeatureGuidePage';
+import { canAccessRoute } from './config/accessPolicy';
 
-const ADMIN_ROLES = new Set(['platform_admin', 'organisation_admin', 'programme_admin', 'admin']);
 const CONTRIBUTOR_ROLES = new Set(['mentor', 'partner', 'investor', 'service_provider', 'contributor']);
 
 function normaliseRoleKey(account) {
@@ -157,7 +157,6 @@ export default function App() {
   if (!user) return <LoginPage authError={authError} />;
   if (user.status !== 'Active') return <PendingAccountPage user={user} onLogout={() => signOut(auth)} />;
 
-  const isAdmin = ADMIN_ROLES.has(user.roleKey);
   const isStartup = user.roleKey === 'startup';
   const isContributor = CONTRIBUTOR_ROLES.has(user.roleKey);
 
@@ -188,19 +187,17 @@ export default function App() {
           <main className="app-page">
             <Routes>
               <Route path="/" element={<Home />} />
-              {isAdmin && <>
-                <Route path="/matches" element={<MatchesPage user={user} />} />
-                <Route path="/insights" element={<InsightsPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
-                <Route path="/outcomes" element={<OutcomesPage />} />
-                <Route path="/programmes/create" element={<CreateProgrammePage user={user} />} />
-              </>}
-              <Route path="/companies" element={<CompaniesPage />} />
-              <Route path="/companies/:id" element={<CompanyDetailPage />} />
-              <Route path="/contributors" element={<ContributorsPage />} />
-              <Route path="/programmes" element={<ProgrammesPage />} />
-              <Route path="/programmes/:id" element={<ProgrammeDetailPage user={user} />} />
-              <Route path="/feature-guide" element={<FeatureGuidePage user={user} />} />
+              {canAccessRoute(user.roleKey, '/matches') ? <Route path="/matches" element={<MatchesPage user={user} />} /> : null}
+              {canAccessRoute(user.roleKey, '/insights') ? <Route path="/insights" element={<InsightsPage />} /> : null}
+              {canAccessRoute(user.roleKey, '/settings') ? <Route path="/settings" element={<SettingsPage />} /> : null}
+              {canAccessRoute(user.roleKey, '/outcomes') ? <Route path="/outcomes" element={<OutcomesPage />} /> : null}
+              {canAccessRoute(user.roleKey, '/programmes/create') ? <Route path="/programmes/create" element={<CreateProgrammePage user={user} />} /> : null}
+              {canAccessRoute(user.roleKey, '/companies') ? <Route path="/companies" element={<CompaniesPage />} /> : null}
+              {canAccessRoute(user.roleKey, '/companies') ? <Route path="/companies/:id" element={<CompanyDetailPage user={user} />} /> : null}
+              {canAccessRoute(user.roleKey, '/contributors') ? <Route path="/contributors" element={<ContributorsPage />} /> : null}
+              {canAccessRoute(user.roleKey, '/programmes') ? <Route path="/programmes" element={<ProgrammesPage user={user} />} /> : null}
+              {canAccessRoute(user.roleKey, '/programmes') ? <Route path="/programmes/:id" element={<ProgrammeDetailPage user={user} />} /> : null}
+              {canAccessRoute(user.roleKey, '/feature-guide') ? <Route path="/feature-guide" element={<FeatureGuidePage user={user} />} /> : null}
               <Route path="/privacy" element={<PrivacyPolicyPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
+import { getDashboardTabs } from '../config/accessPolicy';
 
 export default function ContributorDashboard({ user }) {
   const [contributor, setContributor] = useState(null);
@@ -15,9 +17,10 @@ export default function ContributorDashboard({ user }) {
   const [startupNames, setStartupNames] = useState({});
   const [recommendationScores, setRecommendationScores] = useState({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
+  const [requestingProgrammeId, setRequestingProgrammeId] = useState('');
 
   useEffect(() => {
     async function load() {
@@ -53,19 +56,37 @@ export default function ContributorDashboard({ user }) {
         countryCoverage: editForm.countryCoverage || [],
       });
       setContributor((p) => ({ ...p, ...editForm }));
-      setActiveTab('overview');
+      setSearchParams({ tab: 'overview' });
     } catch (e) { console.error(e); alert('Failed to save.'); }
     setSaving(false);
   }
 
-  if (loading) return <Spinner />;
+  async function requestProgrammeConnection(programmeId) {
+    setRequestingProgrammeId(programmeId);
+    try {
+      const requestConnection = httpsCallable(functions, 'request_programme_connection');
+      await requestConnection({ programmeId });
+      const poolSnap = await getDocs(query(collection(db, 'programmeContributors'), where('contributorId', '==', user.id)));
+      const pools = [];
+      poolSnap.forEach((item) => pools.push({ id: item.id, ...item.data() }));
+      setPoolAssignments(pools);
+    } catch (error) {
+      console.error('Failed to request programme connection:', error);
+      alert(error?.message || 'Failed to request programme connection.');
+    }
+    setRequestingProgrammeId('');
+  }
 
-  const tabs = [
-    { id: 'overview', label: 'Overview', icon: 'dashboard' },
-    { id: 'profile', label: 'Edit Profile', icon: 'edit' },
-    { id: 'programmes', label: 'Suggested Programmes', icon: 'school' },
-    { id: 'mentees', label: 'Startup Assignments', icon: 'handshake' },
-  ];
+  const tabs = getDashboardTabs(user?.roleKey || 'mentor');
+  const activeTab = tabs.some((tab) => tab.id === searchParams.get('tab')) ? searchParams.get('tab') : 'overview';
+
+  useEffect(() => {
+    if (!searchParams.get('tab')) {
+      setSearchParams({ tab: 'overview' }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  if (loading) return <Spinner />;
 
   return (
     <div>
@@ -88,7 +109,7 @@ export default function ContributorDashboard({ user }) {
 
       <div className="filter-bar" style={{ marginBottom: 24 }}>
         {tabs.map((t) => (
-          <button key={t.id} className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`} onClick={() => setActiveTab(t.id)}>
+          <button key={t.id} className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`} onClick={() => setSearchParams({ tab: t.id })}>
             <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{t.icon}</span> {t.label}
           </button>
         ))}
@@ -157,13 +178,26 @@ export default function ContributorDashboard({ user }) {
       {activeTab === 'programmes' && (
         <div className="table-container">
           <div className="table-header"><h3>Browse Available Programmes</h3><span className="table-meta">{programmes.filter((p) => p.status === 'Open' || p.status === 'Active').length} open</span></div>
-          <table className="data-table"><thead><tr><th>Programme</th><th>Type</th><th>Sectors</th><th>Status</th></tr></thead>
+          <table className="data-table"><thead><tr><th>Programme</th><th>Type</th><th>Sectors</th><th>Status</th><th style={{ textAlign: 'right' }}>Connection</th></tr></thead>
             <tbody>{programmes.filter((p) => p.status === 'Open' || p.status === 'Active').map((p) => (
               <tr key={p.id}>
                 <td className="cell-bold">{p.name}</td>
                 <td>{p.type}</td>
                 <td><div className="tag-list">{p.targetSectors?.slice(0, 2).map((s) => <Badge key={s} variant="blue">{s}</Badge>)}</div></td>
                 <td><StatusPill status={p.status} /></td>
+                <td style={{ textAlign: 'right' }}>
+                  {(() => {
+                    const assignment = poolAssignments.find((item) => item.programmeId === p.id);
+                    if (!assignment) {
+                      return (
+                        <button className="btn btn-sm btn-primary" onClick={() => requestProgrammeConnection(p.id)} disabled={requestingProgrammeId === p.id}>
+                          {requestingProgrammeId === p.id ? 'Requesting...' : 'Request Connection'}
+                        </button>
+                      );
+                    }
+                    return <StatusPill status={assignment.status} />;
+                  })()}
+                </td>
               </tr>
             ))}</tbody>
           </table>

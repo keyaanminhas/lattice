@@ -1,113 +1,38 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { db, functions } from '../firebase';
+import { functions } from '../firebase';
 import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
-
-function computeDashboardStats({
-  organisations,
-  programmes,
-  startups,
-  contributors,
-  applications,
-  pools,
-  recommendations,
-  relationships,
-  outcomes,
-}) {
-  const success_rate = outcomes.length
-    ? Math.round(
-      (outcomes.filter((outcome) => outcome.outcomeAchieved === 'Yes').length / outcomes.length) * 1000,
-    ) / 10
-    : 0;
-
-  return {
-    totalOrganisations: organisations.length,
-    openProgrammes: programmes.filter((programme) => ['Open', 'Active'].includes(programme.status)).length,
-    totalStartups: startups.length,
-    verifiedStartups: startups.filter((startup) => startup.verificationStatus === 'Verified').length,
-    totalContributors: contributors.length,
-    programmePoolAssignments: pools.filter((pool) => pool.status === 'Approved').length,
-    pendingApplications: applications.filter((application) => application.status === 'Pending Admin Review').length,
-    acceptedApplications: applications.filter((application) => application.status === 'Accepted').length,
-    pendingRecommendations: recommendations.filter((recommendation) => recommendation.status === 'Pending Approval').length,
-    activeRelationships: relationships.filter((relationship) => relationship.status === 'Active').length,
-    completedRelationships: relationships.filter((relationship) => relationship.status === 'Completed').length,
-    outcomeSuccessRate: success_rate,
-  };
-}
+import { canAccessRoute, canPerformAction } from '../config/accessPolicy';
+import { trackRoleFeatureEvent } from '../services/telemetry';
 
 export default function DashboardPage({ user }) {
   const [stats, setStats] = useState(null);
   const [recentRecommendations, setRecentRecommendations] = useState([]);
-  const [startups, setStartups] = useState({});
-  const [contributors, setContributors] = useState({});
-  const [programmes, setProgrammes] = useState({});
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     async function load() {
       try {
-        const [
-          organisationSnap,
-          startupSnap,
-          contributorSnap,
-          programmeSnap,
-          applicationSnap,
-          poolSnap,
-          recommendationSnap,
-          recentRecommendationSnap,
-          relationshipSnap,
-          outcomeSnap,
-        ] = await Promise.all([
-          getDocs(collection(db, 'organisations')),
-          getDocs(collection(db, 'companies')),
-          getDocs(collection(db, 'contributors')),
-          getDocs(collection(db, 'programmes')),
-          getDocs(collection(db, 'applications')),
-          getDocs(collection(db, 'programmeContributors')),
-          getDocs(collection(db, 'recommendations')),
-          getDocs(query(collection(db, 'recommendations'), limit(5))),
-          getDocs(collection(db, 'relationships')),
-          getDocs(collection(db, 'outcomes')),
-        ]);
-        const sMap = {}; startupSnap.forEach((d) => { sMap[d.id] = d.data().name; }); setStartups(sMap);
-        const cMap = {}; contributorSnap.forEach((d) => { cMap[d.id] = d.data().name; }); setContributors(cMap);
-        const pMap = {}; programmeSnap.forEach((d) => { pMap[d.id] = d.data().name; }); setProgrammes(pMap);
-        const recList = []; recentRecommendationSnap.forEach((d) => recList.push({ id: d.id, ...d.data() }));
-        setRecentRecommendations(recList);
-
-        const fallbackStats = computeDashboardStats({
-          organisations: organisationSnap.docs.map((doc) => doc.data()),
-          programmes: programmeSnap.docs.map((doc) => doc.data()),
-          startups: startupSnap.docs.map((doc) => doc.data()),
-          contributors: contributorSnap.docs.map((doc) => doc.data()),
-          applications: applicationSnap.docs.map((doc) => doc.data()),
-          pools: poolSnap.docs.map((doc) => doc.data()),
-          recommendations: recommendationSnap.docs.map((doc) => doc.data()),
-          relationships: relationshipSnap.docs.map((doc) => doc.data()),
-          outcomes: outcomeSnap.docs.map((doc) => doc.data()),
-        });
-
-        try {
-          const getStats = httpsCallable(functions, 'get_dashboard_stats');
-          const result = await getStats({});
-          setStats(result.data);
-        } catch (error) {
-          console.error('Dashboard stats fallback activated:', error);
-          setStats(fallbackStats);
-        }
-      } catch (e) { console.error('Dashboard load failed:', e); }
+        const getOverview = httpsCallable(functions, 'get_dashboard_overview');
+        const result = await getOverview({});
+        const payload = result.data || {};
+        setStats(payload.stats || {});
+        setRecentRecommendations(payload.recentQueue || []);
+      } catch (error) {
+        trackRoleFeatureEvent('permission_denied_by_backend', { action: 'get_dashboard_overview', message: error?.message || 'unknown' });
+        console.error('Dashboard load failed:', error);
+      }
       setLoading(false);
     }
     load();
   }, []);
 
   if (loading) return <Spinner />;
+  const roleKey = user?.roleKey || '';
 
   const statCards = [
     { label: 'Organisations', value: stats?.totalOrganisations, icon: 'apartment' },
@@ -119,6 +44,57 @@ export default function DashboardPage({ user }) {
     { label: 'Completed', value: stats?.completedRelationships, icon: 'check_circle' },
     { label: 'Success Rate', value: `${stats?.outcomeSuccessRate || 0}%`, icon: 'trending_up' },
   ];
+
+  const taskCards = [
+    {
+      id: 'pending-registrations',
+      visible: canPerformAction(roleKey, 'review_pending_registration') && canAccessRoute(roleKey, '/settings'),
+      label: 'Pending Registrations',
+      count: stats?.pendingRegistrations || 0,
+      cta: 'Open Registration Queue',
+      onClick: () => navigate('/settings?tab=registrations'),
+    },
+    {
+      id: 'pending-applications',
+      visible: canPerformAction(roleKey, 'review_programme_application') && canAccessRoute(roleKey, '/programmes'),
+      label: 'Pending Startup Applications',
+      count: stats?.pendingApplications || 0,
+      cta: 'Review Applications',
+      onClick: () => navigate('/programmes?queue=applications'),
+    },
+    {
+      id: 'pending-connections',
+      visible: canPerformAction(roleKey, 'review_programme_connection_request') && canAccessRoute(roleKey, '/programmes'),
+      label: 'Pending Contributor Requests',
+      count: stats?.pendingConnectionRequests || 0,
+      cta: 'Review Connections',
+      onClick: () => navigate('/programmes?queue=connections'),
+    },
+    {
+      id: 'pending-recommendations',
+      visible: canPerformAction(roleKey, 'review_recommendation') && canAccessRoute(roleKey, '/matches'),
+      label: 'Pending Recommendations',
+      count: stats?.pendingRecommendations || 0,
+      cta: 'Open Recommendation Queue',
+      onClick: () => navigate('/matches?status=Pending%20Approval'),
+    },
+    {
+      id: 'awaiting-outcomes',
+      visible: canPerformAction(roleKey, 'submit_outcome') && canAccessRoute(roleKey, '/outcomes'),
+      label: 'Awaiting Outcomes',
+      count: stats?.awaitingOutcomes || 0,
+      cta: 'Record Outcomes',
+      onClick: () => navigate('/outcomes?status=awaiting'),
+    },
+    {
+      id: 'create-programme',
+      visible: canPerformAction(roleKey, 'create_programme') && canAccessRoute(roleKey, '/programmes/create'),
+      label: 'Programme Setup',
+      count: null,
+      cta: 'Create Programme',
+      onClick: () => navigate('/programmes/create'),
+    },
+  ].filter((item) => item.visible);
 
   return (
     <div>
@@ -137,9 +113,16 @@ export default function DashboardPage({ user }) {
           <button className="btn btn-outline" onClick={() => navigate('/programmes')}>
             <span className="material-symbols-outlined">school</span> Programmes
           </button>
-          <button className="btn btn-primary" onClick={() => navigate('/matches')}>
-            <span className="material-symbols-outlined">handshake</span> Recommendation Queue
-          </button>
+          {canAccessRoute(roleKey, '/matches') ? (
+            <button className="btn btn-primary" onClick={() => navigate('/matches?status=Pending%20Approval')}>
+              <span className="material-symbols-outlined">handshake</span> Recommendation Queue
+            </button>
+          ) : null}
+          {canAccessRoute(roleKey, '/settings') ? (
+            <button className="btn btn-primary" onClick={() => navigate('/settings?tab=registrations')}>
+              <span className="material-symbols-outlined">pending_actions</span> Registration Queue
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -158,10 +141,37 @@ export default function DashboardPage({ user }) {
         </div>
       )}
 
+      {taskCards.length > 0 ? (
+        <div className="table-container" style={{ marginBottom: 20 }}>
+          <div className="table-header">
+            <h3>Action Queue</h3>
+          </div>
+          <div className="recommendation-grid">
+            {taskCards.map((task) => (
+              <div key={task.id} className="recommendation-card">
+                <div className="stack-item-header">
+                  <div>
+                    <h4>{task.label}</h4>
+                    <div className="stack-item-meta">
+                      {typeof task.count === 'number' ? `${task.count} pending` : 'Action available'}
+                    </div>
+                  </div>
+                </div>
+                <div className="recommendation-actions">
+                  <button className="btn btn-sm btn-primary" onClick={task.onClick}>{task.cta}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="table-container">
         <div className="table-header">
           <h3>Recent Recommendations</h3>
-          <button className="btn btn-sm btn-outline" onClick={() => navigate('/matches')}>View All <span className="material-symbols-outlined" style={{ fontSize: 16 }}>arrow_forward</span></button>
+          {canAccessRoute(roleKey, '/matches') ? (
+            <button className="btn btn-sm btn-outline" onClick={() => navigate('/matches?status=Pending%20Approval')}>View Queue <span className="material-symbols-outlined" style={{ fontSize: 16 }}>arrow_forward</span></button>
+          ) : null}
         </div>
         {recentRecommendations.length === 0 ? (
           <div className="empty-state">No recommendations generated yet.</div>
@@ -174,9 +184,9 @@ export default function DashboardPage({ user }) {
               {recentRecommendations.map((r) => (
                 <tr key={r.id}>
                   <td className="cell-bold">{r.recommendationType}</td>
-                  <td>{programmes[r.programmeId] || r.programmeId}</td>
-                  <td>{startups[r.sourceEntityId] || contributors[r.sourceEntityId] || r.sourceEntityId}</td>
-                  <td>{programmes[r.targetEntityId] || contributors[r.targetEntityId] || r.targetEntityId}</td>
+                  <td>{r.programmeName || r.programmeId}</td>
+                  <td>{r.sourceLabel || r.sourceEntityId}</td>
+                  <td>{r.targetLabel || r.targetEntityId}</td>
                   <td><ScoreBadge score={r.matchScore} label="AI confidence" /></td>
                   <td><StatusPill status={r.status} /></td>
                 </tr>

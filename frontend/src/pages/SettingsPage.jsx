@@ -1,12 +1,18 @@
-import { useState } from 'react';
-import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebase';
+import { useEffect, useState } from 'react';
+import { collection, addDoc, getDocs, query, serverTimestamp, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { useSearchParams } from 'react-router-dom';
+import { db, functions } from '../firebase';
 import { Spinner } from '../components/Shared';
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('ai');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'ai');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState('');
+  const [pendingRegistrations, setPendingRegistrations] = useState([]);
+  const [loadingRegistrations, setLoadingRegistrations] = useState(false);
+  const [reviewingUid, setReviewingUid] = useState('');
 
   // AI Thresholds
   const [thresholds, setThresholds] = useState({
@@ -57,8 +63,66 @@ export default function SettingsPage() {
     setSaving(false);
   }
 
+  async function loadPendingRegistrations() {
+    setLoadingRegistrations(true);
+    try {
+      const [accountsSnap, orgSnap, startupSnap, contributorSnap] = await Promise.all([
+        getDocs(query(collection(db, 'accounts'), where('status', '==', 'Pending'))),
+        getDocs(collection(db, 'organisations')),
+        getDocs(collection(db, 'companies')),
+        getDocs(collection(db, 'contributors')),
+      ]);
+      const organisationNames = {};
+      orgSnap.forEach((item) => { organisationNames[item.id] = item.data().name; });
+      const startupNames = {};
+      startupSnap.forEach((item) => { startupNames[item.id] = item.data().name; });
+      const contributorNames = {};
+      contributorSnap.forEach((item) => { contributorNames[item.id] = item.data().name; });
+
+      const rows = [];
+      accountsSnap.forEach((item) => {
+        const account = { id: item.id, ...item.data() };
+        let entityName = account.displayName || account.entityId;
+        if (account.entityType === 'organisation') entityName = organisationNames[account.entityId] || entityName;
+        if (account.entityType === 'company') entityName = startupNames[account.entityId] || entityName;
+        if (account.entityType === 'contributor') entityName = contributorNames[account.entityId] || entityName;
+        rows.push({ ...account, entityName });
+      });
+      rows.sort((a, b) => (a.createdAt?.seconds || 0) - (b.createdAt?.seconds || 0));
+      setPendingRegistrations(rows);
+    } catch (error) {
+      console.error('Failed to load pending registrations:', error);
+      alert('Failed to load pending registrations.');
+    }
+    setLoadingRegistrations(false);
+  }
+
+  async function reviewPendingRegistration(uid, decision) {
+    setReviewingUid(uid);
+    try {
+      const review = httpsCallable(functions, 'review_pending_registration');
+      await review({ uid, decision });
+      await loadPendingRegistrations();
+    } catch (error) {
+      console.error('Failed to review registration:', error);
+      alert(error?.message || 'Failed to review registration.');
+    }
+    setReviewingUid('');
+  }
+
+  useEffect(() => {
+    if (activeTab !== 'registrations') return;
+    loadPendingRegistrations();
+  }, [activeTab]);
+
+  useEffect(() => {
+    const tab = searchParams.get('tab') || 'ai';
+    setActiveTab(tab);
+  }, [searchParams]);
+
   const tabs = [
     { id: 'ai', label: 'AI Thresholds', icon: 'auto_awesome' },
+    { id: 'registrations', label: 'Pending Registrations', icon: 'pending_actions' },
     { id: 'categories', label: 'Global Categories', icon: 'category' },
     { id: 'platform', label: 'Platform Config', icon: 'settings' },
     { id: 'audit', label: 'Audit Log', icon: 'history' },
@@ -74,7 +138,11 @@ export default function SettingsPage() {
 
       <div className="filter-bar" style={{ marginBottom: 24 }}>
         {tabs.map((t) => (
-          <button key={t.id} className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`} onClick={() => setActiveTab(t.id)}>
+          <button
+            key={t.id}
+            className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`}
+            onClick={() => setSearchParams({ tab: t.id })}
+          >
             <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{t.icon}</span> {t.label}
           </button>
         ))}
@@ -97,6 +165,50 @@ export default function SettingsPage() {
             <button className="btn btn-primary" onClick={() => handleSave('ai')} disabled={saving}>{saving ? 'Saving...' : 'Save Thresholds'}</button>
             {saved === 'ai' && <span style={{ color: '#1b5e20', fontSize: 13, fontWeight: 600 }}>✓ Saved</span>}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'registrations' && (
+        <div className="card">
+          <div className="card-title" style={{ marginBottom: 20 }}><span className="material-symbols-outlined" style={{ color: '#737686' }}>pending_actions</span> Pending Registration Reviews</div>
+          <p style={{ fontSize: 13, color: '#434655', marginBottom: 20 }}>Approve or reject pending startup, contributor, and organisation registrations.</p>
+          {loadingRegistrations ? (
+            <Spinner />
+          ) : pendingRegistrations.length === 0 ? (
+            <div className="empty-state">No pending registrations.</div>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Entity</th>
+                  <th>Status</th>
+                  <th style={{ textAlign: 'right' }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingRegistrations.map((account) => (
+                  <tr key={account.id}>
+                    <td className="cell-bold">{account.email}</td>
+                    <td>{account.roleKey}</td>
+                    <td>{account.entityName}</td>
+                    <td>{account.status}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: 8 }}>
+                        <button className="btn btn-sm btn-success" onClick={() => reviewPendingRegistration(account.id, 'Approved')} disabled={reviewingUid === account.id}>
+                          {reviewingUid === account.id ? 'Reviewing...' : 'Approve'}
+                        </button>
+                        <button className="btn btn-sm btn-danger" onClick={() => reviewPendingRegistration(account.id, 'Rejected')} disabled={reviewingUid === account.id}>
+                          Reject
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 

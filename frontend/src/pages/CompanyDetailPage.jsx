@@ -4,8 +4,9 @@ import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StarRating, StatusPill, Spinner } from '../components/Shared';
+import { canPerformAction } from '../config/accessPolicy';
 
-export default function CompanyDetailPage() {
+export default function CompanyDetailPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [startup, setStartup] = useState(null);
@@ -16,7 +17,6 @@ export default function CompanyDetailPage() {
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
   const [generatingProgrammes, setGeneratingProgrammes] = useState(false);
-  const [generatingMentorFor, setGeneratingMentorFor] = useState('');
   const [programmeNames, setProgrammeNames] = useState({});
   const [contributorNames, setContributorNames] = useState({});
 
@@ -76,19 +76,6 @@ export default function CompanyDetailPage() {
     setGeneratingProgrammes(false);
   }
 
-  async function generateMentorRecommendations(programmeId) {
-    setGeneratingMentorFor(programmeId);
-    try {
-      const recommend = httpsCallable(functions, 'recommend_mentor_for_startup');
-      await recommend({ startupId: id, programmeId });
-      await refreshRecommendations();
-    } catch (error) {
-      console.error('Mentor recommendation failed:', error);
-      alert('Failed to generate mentor recommendations.');
-    }
-    setGeneratingMentorFor('');
-  }
-
   async function loadAIProfile() {
     setProfileLoading(true);
     try {
@@ -104,6 +91,9 @@ export default function CompanyDetailPage() {
   if (loading) return <Spinner />;
   if (!startup) return <div className="empty-state"><p>Startup not found.</p></div>;
 
+  const isStartupOwner = user?.roleKey === 'startup' && user?.id === id;
+  const canGenerateProfileSummary = canPerformAction(user?.roleKey, 'generate_profile_summary', { isOwner: isStartupOwner });
+  const canGenerateProgrammeRecommendations = canPerformAction(user?.roleKey, 'generate_programme_recommendations', { isOwner: isStartupOwner });
   const mentorRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Mentor');
   const mentorRelationships = relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor');
   const programmeRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Programme');
@@ -143,12 +133,16 @@ export default function CompanyDetailPage() {
           </div>
         </div>
         <div className="hero-actions">
-          <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
-            {profileLoading ? 'Analyzing...' : 'Generate Profile Summary'}
-          </button>
-          <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
-            {generatingProgrammes ? 'Generating...' : 'Generate Programme Recommendations'}
-          </button>
+          {canGenerateProfileSummary ? (
+            <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
+              {profileLoading ? 'Analyzing...' : 'Generate Profile Summary'}
+            </button>
+          ) : null}
+          {canGenerateProgrammeRecommendations ? (
+            <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
+              {generatingProgrammes ? 'Generating...' : 'Generate Programme Recommendations'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -255,7 +249,6 @@ export default function CompanyDetailPage() {
                 <th>Programme</th>
                 <th>AI Fit</th>
                 <th>Status</th>
-                <th>Mentor Matching</th>
               </tr>
             </thead>
             <tbody>
@@ -264,19 +257,6 @@ export default function CompanyDetailPage() {
                   <td style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</td>
                   <td><ScoreBadge score={item.aiFitScore} /></td>
                   <td><StatusPill status={item.status} /></td>
-                  <td>
-                    {item.status === 'Accepted' ? (
-                      <button
-                        className="btn btn-sm btn-primary"
-                        onClick={() => generateMentorRecommendations(item.programmeId)}
-                        disabled={generatingMentorFor === item.programmeId}
-                      >
-                        {generatingMentorFor === item.programmeId ? 'Generating...' : 'Generate Mentor Recommendations'}
-                      </button>
-                    ) : (
-                      <span className="review-note">Admission required first</span>
-                    )}
-                  </td>
                 </tr>
               ))}
             </tbody>

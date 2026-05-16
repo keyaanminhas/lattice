@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db } from '../firebase';
 import { Badge, StatusPill, Spinner } from '../components/Shared';
+import { canPerformAction } from '../config/accessPolicy';
 
-export default function ProgrammesPage() {
+export default function ProgrammesPage({ user }) {
   const [programmes, setProgrammes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({});
-  const [filterStatus, setFilterStatus] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -19,16 +20,50 @@ export default function ProgrammesPage() {
       ]);
       const list = []; pSnap.forEach((d) => list.push({ id: d.id, ...d.data() }));
       const agg = {};
-      aSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; agg[v.programmeId].apps++; if (v.status === 'Accepted') agg[v.programmeId].accepted++; });
-      poolSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; if (v.status === 'Approved') agg[v.programmeId].pools++; });
-      relSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; if (v.relationshipType === 'Startup-to-Mentor' && v.status !== 'Rejected') agg[v.programmeId].mentors++; });
+      aSnap.forEach((d) => {
+        const v = d.data();
+        agg[v.programmeId] ||= { apps: 0, pendingApps: 0, accepted: 0, pools: 0, pendingConnections: 0, mentors: 0 };
+        agg[v.programmeId].apps++;
+        if (v.status === 'Pending Admin Review') agg[v.programmeId].pendingApps++;
+        if (v.status === 'Accepted') agg[v.programmeId].accepted++;
+      });
+      poolSnap.forEach((d) => {
+        const v = d.data();
+        agg[v.programmeId] ||= { apps: 0, pendingApps: 0, accepted: 0, pools: 0, pendingConnections: 0, mentors: 0 };
+        if (v.status === 'Approved') agg[v.programmeId].pools++;
+        if (v.status === 'Pending Approval') agg[v.programmeId].pendingConnections++;
+      });
+      relSnap.forEach((d) => {
+        const v = d.data();
+        agg[v.programmeId] ||= { apps: 0, pendingApps: 0, accepted: 0, pools: 0, pendingConnections: 0, mentors: 0 };
+        if (v.relationshipType === 'Startup-to-Mentor' && v.status !== 'Rejected') agg[v.programmeId].mentors++;
+      });
       setProgrammes(list); setStats(agg); setLoading(false);
     }
     load();
   }, []);
 
   if (loading) return <Spinner />;
-  const filtered = programmes.filter((p) => !filterStatus || p.status === filterStatus);
+  const filterStatus = searchParams.get('status') || '';
+  const queue = searchParams.get('queue') || '';
+  const filtered = programmes.filter((p) => {
+    const s = stats[p.id] || { pendingApps: 0, pendingConnections: 0, accepted: 0, mentors: 0 };
+    if (filterStatus && p.status !== filterStatus) return false;
+    if (queue === 'applications' && s.pendingApps <= 0) return false;
+    if (queue === 'connections' && s.pendingConnections <= 0) return false;
+    if (queue === 'mentor-generation' && s.accepted <= s.mentors) return false;
+    return true;
+  });
+  const canCreateProgramme = canPerformAction(user?.roleKey, 'create_programme');
+
+  function updateSearchParams(next) {
+    const params = new URLSearchParams(searchParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (!value) params.delete(key);
+      else params.set(key, value);
+    });
+    setSearchParams(params);
+  }
 
   return (
     <div>
@@ -37,9 +72,11 @@ export default function ProgrammesPage() {
           <h2 className="page-title">Programmes</h2>
           <p className="page-subtitle">{programmes.length} programme contexts for admissions, pools, and mentor relationships.</p>
         </div>
-        <button className="btn btn-primary" onClick={() => navigate('/programmes/create')}>
-          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span> Create Programme
-        </button>
+        {canCreateProgramme ? (
+          <button className="btn btn-primary" onClick={() => navigate('/programmes/create')}>
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span> Create Programme
+          </button>
+        ) : null}
       </div>
 
       <div className="stat-grid">
@@ -50,8 +87,14 @@ export default function ProgrammesPage() {
       </div>
 
       <div className="filter-bar">
-        <select className="filter-input" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <select className="filter-input" value={filterStatus} onChange={(e) => updateSearchParams({ status: e.target.value })}>
           <option value="">All Statuses</option><option value="Open">Open</option><option value="Active">Active</option><option value="Draft">Draft</option><option value="Closed">Closed</option>
+        </select>
+        <select className="filter-input" value={queue} onChange={(e) => updateSearchParams({ queue: e.target.value })}>
+          <option value="">All Queues</option>
+          <option value="applications">Pending Applications</option>
+          <option value="connections">Pending Connections</option>
+          <option value="mentor-generation">Mentor Generation Needed</option>
         </select>
       </div>
 
@@ -61,9 +104,11 @@ export default function ProgrammesPage() {
           <table className="data-table">
             <thead><tr><th>Programme</th><th>Type</th><th>Status</th><th>Outcomes</th><th style={{ textAlign: 'right' }}>Apps</th><th style={{ textAlign: 'right' }}>Admitted</th><th style={{ textAlign: 'right' }}>Pool</th><th style={{ textAlign: 'right' }}>Mentors</th><th></th></tr></thead>
             <tbody>{filtered.map((p) => {
-              const s = stats[p.id] || { apps: 0, accepted: 0, pools: 0, mentors: 0 };
+              const s = stats[p.id] || { apps: 0, pendingApps: 0, accepted: 0, pools: 0, pendingConnections: 0, mentors: 0 };
+              const detailSection = queue === 'applications' ? 'applications' : queue === 'connections' ? 'connections' : queue === 'mentor-generation' ? 'mentor-generation' : '';
+              const detailTarget = detailSection ? `/programmes/${p.id}?section=${detailSection}` : `/programmes/${p.id}`;
               return (
-                <tr key={p.id} onClick={() => navigate(`/programmes/${p.id}`)} style={{ cursor: 'pointer' }}>
+                <tr key={p.id} onClick={() => navigate(detailTarget)} style={{ cursor: 'pointer' }}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                       <div className="avatar avatar-sm avatar-blue"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>school</span></div>

@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
 import { RoleAccessBanner } from '../components/FeatureVisibility';
 import { trackRoleFeatureEvent } from '../services/telemetry';
+import { canPerformAction } from '../config/accessPolicy';
 
 export default function ProgrammeDetailPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [programme, setProgramme] = useState(null);
   const [applications, setApplications] = useState([]);
   const [poolAssignments, setPoolAssignments] = useState([]);
@@ -19,51 +21,101 @@ export default function ProgrammeDetailPage({ user }) {
   const [startupNames, setStartupNames] = useState({});
   const [contributorNames, setContributorNames] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [graphError, setGraphError] = useState('');
   const [busyStartupId, setBusyStartupId] = useState('');
+  const [busyApplicationId, setBusyApplicationId] = useState('');
+  const [busyConnectionId, setBusyConnectionId] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
+
     async function load() {
-      const getGraphView = httpsCallable(functions, 'get_programme_graph_view');
-      const [programmeDoc, startupSnap, contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
-        getDoc(doc(db, 'programmes', id)),
-        getDocs(collection(db, 'companies')),
-        getDocs(collection(db, 'contributors')),
-        getDocs(query(collection(db, 'applications'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
-      ]);
-      const graphResult = await getGraphView({ programmeId: id });
+      setLoading(true);
+      setLoadError('');
+      setGraphError('');
 
-      if (programmeDoc.exists()) setProgramme({ id: programmeDoc.id, ...programmeDoc.data() });
+      try {
+        const [programmeDoc, startupSnap, contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
+          getDoc(doc(db, 'programmes', id)),
+          getDocs(collection(db, 'companies')),
+          getDocs(collection(db, 'contributors')),
+          getDocs(query(collection(db, 'applications'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
+        ]);
 
-      const startupMap = {};
-      startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
-      const contributorMap = {};
-      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
-      setStartupNames(startupMap);
-      setContributorNames(contributorMap);
+        if (cancelled) return;
 
-      const appList = [];
-      appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
-      const poolList = [];
-      poolSnap.forEach((item) => poolList.push({ id: item.id, ...item.data() }));
-      const recList = [];
-      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
-      const relList = [];
-      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
+        setProgramme(programmeDoc.exists() ? { id: programmeDoc.id, ...programmeDoc.data() } : null);
 
-      setApplications(appList);
-      setPoolAssignments(poolList);
-      setRecommendations(recList);
-      setRelationships(relList);
-      setGraphView(graphResult.data);
-      setLoading(false);
-      trackRoleFeatureEvent('programme_page_loaded', { programmeId: id });
+        const startupMap = {};
+        startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
+        const contributorMap = {};
+        contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+        setStartupNames(startupMap);
+        setContributorNames(contributorMap);
+
+        const appList = [];
+        appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
+        const poolList = [];
+        poolSnap.forEach((item) => poolList.push({ id: item.id, ...item.data() }));
+        const recList = [];
+        recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
+        const relList = [];
+        relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
+
+        setApplications(appList);
+        setPoolAssignments(poolList);
+        setRecommendations(recList);
+        setRelationships(relList);
+
+        try {
+          const getGraphView = httpsCallable(functions, 'get_programme_graph_view');
+          const graphResult = await getGraphView({ programmeId: id });
+          if (!cancelled) setGraphView(graphResult.data);
+        } catch (error) {
+          console.error('Failed to load programme graph view:', error);
+          if (!cancelled) {
+            setGraphView(null);
+            setGraphError('Programme graph insights are not available for this account.');
+            trackRoleFeatureEvent('permission_attempt_failed', { action: 'get_programme_graph_view', programmeId: id });
+          }
+        }
+
+        trackRoleFeatureEvent('programme_page_loaded', { programmeId: id });
+      } catch (error) {
+        console.error('Failed to load programme detail:', error);
+        if (!cancelled) setLoadError('Programme data could not be loaded.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
 
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [id]);
+
+  useEffect(() => {
+    if (loading) return;
+    const section = searchParams.get('section');
+    if (!section) return;
+    const sectionIdMap = {
+      applications: 'section-applications',
+      connections: 'section-connections',
+      'mentor-generation': 'section-applications',
+      relationships: 'section-relationships',
+    };
+    const targetId = sectionIdMap[section];
+    if (!targetId) return;
+    const node = document.getElementById(targetId);
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [loading, searchParams]);
 
   async function generateMentorRecommendations(startupId) {
     setBusyStartupId(startupId);
@@ -83,11 +135,62 @@ export default function ProgrammeDetailPage({ user }) {
     setBusyStartupId('');
   }
 
+  async function reviewProgrammeApplication(applicationId, decision) {
+    setBusyApplicationId(applicationId);
+    try {
+      const review = httpsCallable(functions, 'review_programme_application');
+      await review({ applicationId, decision });
+      const [appSnap, relSnap] = await Promise.all([
+        getDocs(query(collection(db, 'applications'), where('programmeId', '==', id))),
+        getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
+      ]);
+      const appList = [];
+      appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
+      const relList = [];
+      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
+      setApplications(appList);
+      setRelationships(relList);
+    } catch (error) {
+      console.error('Failed to review programme application:', error);
+      alert(error?.message || 'Failed to review programme application.');
+    }
+    setBusyApplicationId('');
+  }
+
+  async function reviewProgrammeConnectionRequest(requestId, decision) {
+    setBusyConnectionId(requestId);
+    try {
+      const review = httpsCallable(functions, 'review_programme_connection_request');
+      await review({ requestId, decision });
+      const [poolSnap, relSnap] = await Promise.all([
+        getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
+        getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
+      ]);
+      const poolList = [];
+      poolSnap.forEach((item) => poolList.push({ id: item.id, ...item.data() }));
+      const relList = [];
+      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
+      setPoolAssignments(poolList);
+      setRelationships(relList);
+    } catch (error) {
+      console.error('Failed to review contributor connection request:', error);
+      alert(error?.message || 'Failed to review contributor connection request.');
+    }
+    setBusyConnectionId('');
+  }
+
   if (loading) return <Spinner />;
+  if (loadError) return <div className="empty-state"><p>{loadError}</p><button className="btn btn-outline" onClick={() => navigate('/programmes')}>Back to Programmes</button></div>;
   if (!programme) return <div className="empty-state"><p>Programme not found.</p></div>;
 
-  const mentorPool = poolAssignments.filter((item) => item.contributorType === 'Mentor');
-  const resourcePool = poolAssignments.filter((item) => item.contributorType !== 'Mentor');
+  const canGenerateMentorRecommendations = () => canPerformAction(user?.roleKey, 'recommend_mentor_for_startup');
+  const canReviewProgrammeApplication = canPerformAction(user?.roleKey, 'review_programme_application');
+  const canReviewProgrammeConnectionRequest = canPerformAction(user?.roleKey, 'review_programme_connection_request');
+  const activeSection = searchParams.get('section') || '';
+  const pendingConnectionRequests = poolAssignments.filter((item) => item.status === 'Pending Approval');
+  const approvedPoolAssignments = poolAssignments.filter((item) => item.status === 'Approved');
+  const mentorPool = approvedPoolAssignments.filter((item) => item.contributorType === 'Mentor');
+  const resourcePool = approvedPoolAssignments.filter((item) => item.contributorType !== 'Mentor');
 
   return (
     <div>
@@ -115,7 +218,7 @@ export default function ProgrammeDetailPage({ user }) {
               <span>Only accepted startups can move into mentor matching.</span>
             </div>
             <div className="hero-chip">
-              <strong>{poolAssignments.filter((item) => item.status === 'Approved').length} approved pool actors</strong>
+              <strong>{approvedPoolAssignments.length} approved pool actors</strong>
               <span>Programme resources are controlled through explicit approval.</span>
             </div>
           </div>
@@ -144,6 +247,15 @@ export default function ProgrammeDetailPage({ user }) {
           <span>Every relationship feeds the learning loop for stronger future orchestration.</span>
         </div>
       </div>
+
+      {activeSection ? (
+        <div className="card glass-panel" style={{ marginBottom: 20 }}>
+          <div className="card-header">
+            <h3>Focused Queue: {activeSection.replace('-', ' ')}</h3>
+          </div>
+          <p className="cell-muted">You are viewing this programme from a queue shortcut. Relevant review surfaces are below.</p>
+        </div>
+      ) : null}
 
       <div className="detail-sections">
         <div className="card glass-panel">
@@ -239,9 +351,16 @@ export default function ProgrammeDetailPage({ user }) {
             </div>
           </div>
         </div>
+      ) : graphError ? (
+        <div className="card glass-panel" style={{ marginBottom: 20 }}>
+          <div className="card-header">
+            <h3>LatticeGraph</h3>
+          </div>
+          <div className="empty-state"><p>{graphError}</p></div>
+        </div>
       ) : null}
 
-      <div className="card" style={{ marginBottom: 20 }}>
+      <div id="section-applications" className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
           <h3>Startup Application Register</h3>
         </div>
@@ -255,6 +374,7 @@ export default function ProgrammeDetailPage({ user }) {
                 <th>AI Fit</th>
                 <th>Status</th>
                 <th>Mentor Recommendations</th>
+                <th>Review</th>
               </tr>
             </thead>
             <tbody>
@@ -264,7 +384,7 @@ export default function ProgrammeDetailPage({ user }) {
                   <td><ScoreBadge score={item.aiFitScore} label="Programme fit" /></td>
                   <td><StatusPill status={item.status} /></td>
                   <td>
-                    {item.status === 'Accepted' ? (
+                    {item.status === 'Accepted' && canGenerateMentorRecommendations(item.startupId) ? (
                       <button
                         className="btn btn-sm btn-primary"
                         onClick={() => generateMentorRecommendations(item.startupId)}
@@ -272,8 +392,83 @@ export default function ProgrammeDetailPage({ user }) {
                       >
                         {busyStartupId === item.startupId ? 'Generating...' : 'Generate Mentor Recommendations'}
                       </button>
+                    ) : item.status === 'Accepted' ? (
+                      <span className="review-note">Accepted startup</span>
                     ) : (
                       <span className="review-note">Accept startup first</span>
+                    )}
+                  </td>
+                  <td>
+                    {item.status === 'Pending Admin Review' && canReviewProgrammeApplication ? (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="btn btn-sm btn-success"
+                          onClick={() => reviewProgrammeApplication(item.id, 'Approved')}
+                          disabled={busyApplicationId === item.id}
+                        >
+                          {busyApplicationId === item.id ? 'Reviewing...' : 'Approve'}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => reviewProgrammeApplication(item.id, 'Rejected')}
+                          disabled={busyApplicationId === item.id}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="review-note">{item.status === 'Accepted' ? 'Reviewed' : 'Awaiting admin'}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div id="section-connections" className="card" style={{ marginBottom: 20 }}>
+        <div className="card-header">
+          <h3>Contributor Connection Requests</h3>
+        </div>
+        {pendingConnectionRequests.length === 0 ? (
+          <div className="empty-state"><p>No pending contributor connection requests.</p></div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Contributor</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Review</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingConnectionRequests.map((item) => (
+                <tr key={item.id}>
+                  <td style={{ fontWeight: 600 }}>{contributorNames[item.contributorId] || item.contributorId}</td>
+                  <td>{item.contributorType}</td>
+                  <td><StatusPill status={item.status} /></td>
+                  <td>
+                    {canReviewProgrammeConnectionRequest ? (
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          className="btn btn-sm btn-success"
+                          onClick={() => reviewProgrammeConnectionRequest(item.id, 'Approved')}
+                          disabled={busyConnectionId === item.id}
+                        >
+                          {busyConnectionId === item.id ? 'Reviewing...' : 'Approve'}
+                        </button>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => reviewProgrammeConnectionRequest(item.id, 'Rejected')}
+                          disabled={busyConnectionId === item.id}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="review-note">Awaiting admin review</span>
                     )}
                   </td>
                 </tr>
@@ -320,7 +515,7 @@ export default function ProgrammeDetailPage({ user }) {
         </div>
       </div>
 
-      <div className="card">
+      <div id="section-relationships" className="card">
         <div className="card-header">
           <h3>Programme Recommendation and Relationship Register</h3>
         </div>

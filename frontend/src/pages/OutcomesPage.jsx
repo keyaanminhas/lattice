@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { StatusPill, Spinner } from '../components/Shared';
 
@@ -13,6 +14,7 @@ export default function OutcomesPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState('');
   const [formOpen, setFormOpen] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [form, setForm] = useState({ outcomeAchieved: 'Yes', relationshipQuality: 'High', startupRating: 4, contributorRating: 4, startupFeedback: '', contributorFeedback: '', adminEvaluation: '' });
 
   useEffect(() => {
@@ -33,7 +35,24 @@ export default function OutcomesPage() {
   }, []);
 
   const outcomeRelIds = new Set(outcomes.map((o) => o.relationshipId));
-  const eligible = relationships.filter((r) => (r.status === 'Active' || r.status === 'Completed') && !outcomeRelIds.has(r.id));
+  const filterStatus = searchParams.get('status') || '';
+  const filterProgrammeId = searchParams.get('programmeId') || '';
+  const eligible = relationships.filter((r) => {
+    const canRecord = (r.status === 'Active' || r.status === 'Completed') && !outcomeRelIds.has(r.id);
+    if (!canRecord) return false;
+    if (filterProgrammeId && r.programmeId !== filterProgrammeId) return false;
+    if (filterStatus && filterStatus !== 'awaiting') return false;
+    return true;
+  });
+
+  function updateSearch(next) {
+    const params = new URLSearchParams(searchParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (!value) params.delete(key);
+      else params.set(key, value);
+    });
+    setSearchParams(params);
+  }
 
   async function handleSubmit(relId) {
     setSubmitting(relId);
@@ -63,6 +82,18 @@ export default function OutcomesPage() {
       </div>
 
       <div className="table-container">
+        <div className="filter-bar" style={{ marginBottom: 12 }}>
+          <select className="filter-input" value={filterStatus} onChange={(e) => updateSearch({ status: e.target.value })}>
+            <option value="">All</option>
+            <option value="awaiting">Awaiting Outcome</option>
+          </select>
+          <select className="filter-input" value={filterProgrammeId} onChange={(e) => updateSearch({ programmeId: e.target.value })}>
+            <option value="">All Programmes</option>
+            {Object.entries(programmeNames).map(([programmeId, programmeName]) => (
+              <option key={programmeId} value={programmeId}>{programmeName}</option>
+            ))}
+          </select>
+        </div>
         <div className="table-header"><h3>Relationships Awaiting Outcome</h3><span className="table-meta">{eligible.length} pending</span></div>
         {eligible.length === 0 ? <div className="empty-state">All active relationships have recorded outcomes.</div> : (
           <div>

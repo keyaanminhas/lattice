@@ -1,16 +1,11 @@
 import { useState } from 'react';
-import { collection, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { auth, db, functions } from '../firebase';
+import { auth, functions } from '../firebase';
 
 const SECTORS = ['Healthtech', 'Fintech', 'EdTech', 'AgriTech', 'DeepTech', 'Clean Energy', 'Mobility', 'Cybersecurity', 'FoodTech', 'Logistics', 'SaaS', 'IoT', 'AI/ML'];
 const STAGES = ['Idea', 'Pre-seed', 'Seed', 'MVP', 'Growth', 'Series A', 'Scale-up'];
 const OUTCOMES = ['Investor readiness', 'Cloud adoption', 'CISO introductions', 'Compliance readiness', 'Municipality pilots', 'Infrastructure partners', 'Supply chain pilots', 'Manufacturing partners', 'Clinical pilot access', 'Regulatory guidance', 'Banking partnerships', 'Regulatory sandbox access', 'Distribution channels', 'School pilots', 'Government grant access'];
-
-function functionIsMissing(error) {
-  return ['functions/not-found', 'functions/unimplemented'].includes(error?.code);
-}
 
 function isPermissionDenied(error) {
   return ['permission-denied', 'functions/permission-denied'].includes(error?.code)
@@ -22,7 +17,7 @@ function formatCreateProgrammeError(error) {
     return 'Your Firebase sign-in session is not fully ready yet. Wait a moment and try again, or reload the app if it persists.';
   }
   if (isPermissionDenied(error)) {
-    return 'Programme creation is blocked by the live Firebase security configuration for this account. The current Firestore rules or backend callable are not deployed for organisation-admin writes yet.';
+    return 'Programme creation is blocked by account scope or backend permissions for this organisation.';
   }
   if (error?.code === 'functions/invalid-argument') {
     return error.message || 'Programme details are incomplete or invalid.';
@@ -66,33 +61,6 @@ export default function CreateProgrammePage({ user }) {
     throw new Error('Firebase authentication is still initializing.');
   }
 
-  async function createProgrammeViaFirestore(payload) {
-    if (user?.entityType !== 'organisation' || !user?.id) {
-      throw new Error('This account is missing an organisation scope required for direct programme creation.');
-    }
-
-    const programmeRef = doc(collection(db, 'programmes'));
-    const programme = {
-      id: programmeRef.id,
-      organisationId: user.id,
-      name: payload.name.trim(),
-      type: payload.type,
-      country: payload.country?.trim() || 'Malaysia',
-      region: payload.region?.trim() || '',
-      targetSectors: payload.targetSectors,
-      targetStages: payload.targetStages,
-      expectedOutcomes: payload.expectedOutcomes,
-      eligibilityRules: payload.eligibilityRules,
-      status: payload.status,
-      createdByUid: user.uid,
-      updatedByUid: user.uid,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    };
-    await setDoc(programmeRef, programme);
-    return programme.id;
-  }
-
   async function createProgrammeViaCallable(payload) {
     const createProgramme = httpsCallable(functions, 'create_programme');
     const result = await createProgramme(payload);
@@ -113,15 +81,7 @@ export default function CreateProgrammePage({ user }) {
       };
       await ensureFirebaseSession();
 
-      let programmeId = '';
-      try {
-        programmeId = await createProgrammeViaCallable(payload);
-      } catch (callableError) {
-        if (!functionIsMissing(callableError) || user?.entityType !== 'organisation' || !user?.id) {
-          throw callableError;
-        }
-        programmeId = await createProgrammeViaFirestore(payload);
-      }
+      const programmeId = await createProgrammeViaCallable(payload);
 
       navigate(`/programmes/${programmeId}`);
       return;

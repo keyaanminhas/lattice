@@ -35,6 +35,9 @@ VALID_DECISIONS = {"Approved", "Rejected"}
 VALID_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review", "Completed", "Rejected", "Expired"}
 VALID_OUTCOME_ACHIEVEMENTS = {"Yes", "Partial", "No"}
 VALID_PROGRAMME_STATUSES = {"Draft", "Open", "Active", "Closed"}
+VALID_APPLICATION_STATUSES = {"Pending Admin Review", "Accepted", "Rejected"}
+VALID_POOL_REQUEST_STATUSES = {"Pending Approval", "Approved", "Rejected"}
+VALID_CONTRIBUTOR_TYPES = {"Mentor", "Partner", "Investor", "Service Provider"}
 ACTIVE_MENTOR_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review"}
 AI_INSIGHT_SEVERITIES = {"low", "medium", "high"}
 ADMIN_ROLE_KEYS = {"platform_admin", "organisation_admin", "programme_admin"}
@@ -159,6 +162,16 @@ def _require_admin(req: https_fn.CallableRequest, db):
     return account
 
 
+def _require_role(account: dict, allowed_roles: set[str], message: str):
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if account.get("status") == "Active" and role_key in allowed_roles:
+        return
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+        message=message,
+    )
+
+
 def _has_role_assignment(
     db,
     uid: str,
@@ -209,6 +222,127 @@ def _require_admin_scope_for_programme(db, account: dict, programme_id: str):
     )
 
 
+def _programme_ids_for_admin(db, account: dict) -> set[str]:
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if role_key == "platform_admin":
+        return {doc.id for doc in db.collection("programmes").stream()}
+
+    if role_key == "programme_admin":
+        programme_ids: set[str] = set()
+        assignment_query = (
+            db.collection("roleAssignments")
+            .where("uid", "==", account["uid"])
+            .where("roleKey", "==", "programme_admin")
+            .where("scopeType", "==", "programme")
+        )
+        for doc in assignment_query.stream():
+            data = doc.to_dict()
+            if _clean_string(data.get("status")).lower() != "active":
+                continue
+            programme_id = _clean_string(data.get("scopeId"))
+            if programme_id:
+                programme_ids.add(programme_id)
+        return programme_ids
+
+    if role_key == "organisation_admin":
+        organisation_ids: set[str] = set()
+        assignment_query = (
+            db.collection("roleAssignments")
+            .where("uid", "==", account["uid"])
+            .where("roleKey", "==", "organisation_admin")
+            .where("scopeType", "==", "organisation")
+        )
+        for doc in assignment_query.stream():
+            data = doc.to_dict()
+            if _clean_string(data.get("status")).lower() != "active":
+                continue
+            organisation_id = _clean_string(data.get("scopeId"))
+            if organisation_id:
+                organisation_ids.add(organisation_id)
+        if not organisation_ids:
+            return set()
+
+        programme_ids: set[str] = set()
+        for doc in db.collection("programmes").stream():
+            programme = doc.to_dict()
+            if _clean_string(programme.get("organisationId")) in organisation_ids:
+                programme_ids.add(doc.id)
+        return programme_ids
+
+    return set()
+
+
+def _can_review_recommendation(account: dict, recommendation: dict, accessible_programme_ids: set[str]) -> tuple[bool, str]:
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if role_key != "programme_admin":
+        return False, "role_not_allowed"
+    programme_id = _clean_string(recommendation.get("programmeId"))
+    if not programme_id:
+        return False, "missing_programme_scope"
+    if programme_id not in accessible_programme_ids:
+        return False, "out_of_scope"
+    if _clean_string(recommendation.get("status")) != "Pending Approval":
+        return False, "already_reviewed"
+    return True, "in_scope"
+
+
+def _list_recommendation_queue(
+    db,
+    account: dict,
+    status_filter: str = "",
+    type_filter: str = "",
+    programme_filter: str = "",
+) -> list[dict]:
+    role_key = _clean_string(account.get("roleKey")).lower()
+    accessible_programme_ids = _programme_ids_for_admin(db, account) if _is_admin_account(account) else set()
+    if role_key == "programme_admin" and not accessible_programme_ids:
+        return []
+
+    companies = {doc.id: doc.to_dict().get("name") for doc in db.collection("companies").stream()}
+    contributors = {doc.id: doc.to_dict().get("name") for doc in db.collection("contributors").stream()}
+    programmes = {doc.id: doc.to_dict().get("name") for doc in db.collection("programmes").stream()}
+
+    items = []
+    for doc in db.collection("recommendations").stream():
+        recommendation = {"id": doc.id, **doc.to_dict()}
+        programme_id = _clean_string(recommendation.get("programmeId"))
+        if programme_filter and programme_id != programme_filter:
+            continue
+        if status_filter and _clean_string(recommendation.get("status")) != status_filter:
+            continue
+        if type_filter and _clean_string(recommendation.get("recommendationType")) != type_filter:
+            continue
+        if role_key == "programme_admin" and programme_id not in accessible_programme_ids:
+            continue
+
+        can_review, scope_reason = _can_review_recommendation(account, recommendation, accessible_programme_ids)
+        source_id = _clean_string(recommendation.get("sourceEntityId"))
+        target_id = _clean_string(recommendation.get("targetEntityId"))
+        item = {
+            "id": recommendation["id"],
+            "recommendationType": recommendation.get("recommendationType"),
+            "programmeId": programme_id,
+            "programmeName": programmes.get(programme_id, programme_id),
+            "status": recommendation.get("status", "Pending Approval"),
+            "matchScore": recommendation.get("matchScore", recommendation.get("score", 0)),
+            "explanation": recommendation.get("explanation", ""),
+            "scoreBreakdown": recommendation.get("scoreBreakdown", {}),
+            "graphEvidence": recommendation.get("graphEvidence", {}),
+            "riskFlags": recommendation.get("riskFlags", []),
+            "sourceEntityId": source_id,
+            "targetEntityId": target_id,
+            "sourceLabel": companies.get(source_id) or contributors.get(source_id) or programmes.get(source_id) or source_id,
+            "targetLabel": companies.get(target_id) or contributors.get(target_id) or programmes.get(target_id) or target_id,
+            "canReview": can_review,
+            "scopeReason": scope_reason,
+            "reviewScope": "programme" if can_review else "read_only",
+        }
+        items.append(item)
+
+    items.sort(key=lambda row: row.get("matchScore") or 0, reverse=True)
+    return items
+
+
 def _require_startup_owner_or_admin(account: dict, startup_id: str):
     if _is_admin_account(account):
         return
@@ -222,6 +356,56 @@ def _require_startup_owner_or_admin(account: dict, startup_id: str):
     raise https_fn.HttpsError(
         code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
         message="You can only access your own startup profile.",
+    )
+
+
+def _require_contributor_owner_or_admin(account: dict, contributor_id: str):
+    if _is_admin_account(account):
+        return
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if (
+        account.get("status") == "Active"
+        and role_key in (CONTRIBUTOR_ROLE_KEYS | {"contributor"})
+        and account.get("entityType") == "contributor"
+        and account.get("entityId") == contributor_id
+    ):
+        return
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+        message="You can only access your own contributor profile.",
+    )
+
+
+def _require_registration_reviewer(account: dict):
+    _require_role(account, {"platform_admin"}, "Only platform admins can review pending registrations.")
+
+
+def _require_programme_graph_viewer(req: https_fn.CallableRequest, db, programme_id: str) -> dict:
+    account = _require_account(req, db)
+    if _is_admin_account(account):
+        _require_admin_scope_for_programme(db, account, programme_id)
+        return account
+
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if (
+        account.get("status") == "Active"
+        and role_key == "startup"
+        and account.get("entityType") == "company"
+        and account.get("entityId")
+    ):
+        return account
+
+    if (
+        account.get("status") == "Active"
+        and role_key in (CONTRIBUTOR_ROLE_KEYS | {"contributor"})
+        and account.get("entityType") == "contributor"
+        and account.get("entityId")
+    ):
+        return account
+
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+        message="Programme view access is required.",
     )
 
 
@@ -261,6 +445,17 @@ def _legacy_account_type_to_role_key(account_type: str | None) -> str:
         # Legacy contributor accounts are now split into sub-roles. Keep a safe default.
         return "mentor"
     return "startup"
+
+
+def _account_role_to_contributor_type(role_key: str) -> str:
+    normalised = _clean_string(role_key).lower()
+    mapping = {
+        "mentor": "Mentor",
+        "partner": "Partner",
+        "investor": "Investor",
+        "service_provider": "Service Provider",
+    }
+    return mapping.get(normalised, "Mentor")
 
 
 def _normalise_role_key(role_key: str) -> str:
@@ -317,7 +512,7 @@ def _registration_account(
     }
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def complete_entity_registration(req: https_fn.CallableRequest):
     db = _init_firebase()
     if not req.auth:
@@ -455,18 +650,14 @@ def complete_entity_registration(req: https_fn.CallableRequest):
     }
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def create_programme(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_admin(req, db)
     data = _require_data(req)
 
     role_key = _clean_string(account.get("roleKey")).lower()
-    if role_key not in {"platform_admin", "organisation_admin", "admin"}:
-        raise https_fn.HttpsError(
-            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
-            message="Only platform or organisation admins can create programmes.",
-        )
+    _require_role(account, {"organisation_admin"}, "Only organisation admins can create programmes.")
 
     name = _require_string(data, "name")
     programme_type = _require_string(data, "type")
@@ -554,12 +745,364 @@ def create_programme(req: https_fn.CallableRequest):
     }
 
 
+@https_fn.on_call(invoker="public")
+def review_pending_registration(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_admin(req, db)
+    _require_registration_reviewer(account)
+    data = _require_data(req)
+    uid = _require_string(data, "uid")
+    decision = _require_choice(data, "decision", VALID_DECISIONS)
+
+    account_ref = db.collection("accounts").document(uid)
+    account_doc = account_ref.get()
+    if not account_doc.exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.NOT_FOUND,
+            message="Account not found.",
+        )
+
+    target_account = account_doc.to_dict()
+    current_status = _clean_string(target_account.get("status"))
+    if current_status not in {"Pending", "Rejected"}:
+        if decision == "Approved" and current_status == "Active":
+            return {"success": True, "uid": uid, "decision": decision, "status": current_status}
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message=f"Account status is {current_status or 'unknown'} and cannot be reviewed.",
+        )
+
+    entity_type = _clean_string(target_account.get("entityType"))
+    entity_id = _clean_string(target_account.get("entityId"))
+    role_key = _clean_string(target_account.get("roleKey")).lower()
+    if not entity_type or not entity_id:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Account has no linked entity to review.",
+        )
+
+    collection_by_entity = {
+        "organisation": "organisations",
+        "company": "companies",
+        "contributor": "contributors",
+    }
+    entity_collection = collection_by_entity.get(entity_type)
+    if not entity_collection:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Unsupported account entity type for review.",
+        )
+
+    entity_ref = db.collection(entity_collection).document(entity_id)
+    entity_doc = entity_ref.get()
+    if not entity_doc.exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.NOT_FOUND,
+            message="Linked entity not found.",
+        )
+
+    reviewed_status = "Active" if decision == "Approved" else "Rejected"
+    account_ref.update(
+        {
+            "status": reviewed_status,
+            "reviewedAt": firestore.SERVER_TIMESTAMP,
+            "reviewedByUid": account["uid"],
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+    entity_updates = {"updatedAt": firestore.SERVER_TIMESTAMP}
+    if entity_type in {"organisation", "contributor"}:
+        entity_updates["status"] = reviewed_status
+    else:
+        entity_updates["verificationStatus"] = reviewed_status
+    entity_ref.update(entity_updates)
+
+    role_assignment_id = None
+    if decision == "Approved":
+        scope_type = "self"
+        scope_id = entity_id
+        if role_key == "organisation_admin":
+            scope_type = "organisation"
+
+        assignment_id = f"ra-{role_key}-{uid}-{scope_type}-{scope_id}"
+        role_assignment_id = _safe_id_part(assignment_id)
+        assignment_payload = {
+            "id": role_assignment_id,
+            "uid": uid,
+            "roleKey": role_key,
+            "scopeType": scope_type,
+            "scopeId": scope_id,
+            "status": "active",
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+            "approvedByUid": account["uid"],
+            "isSeeded": False,
+        }
+        if scope_type == "organisation":
+            assignment_payload["organisationId"] = scope_id
+
+        assignment_ref = db.collection("roleAssignments").document(role_assignment_id)
+        if assignment_ref.get().exists:
+            assignment_ref.set(assignment_payload, merge=True)
+        else:
+            assignment_ref.set({**assignment_payload, "createdAt": firestore.SERVER_TIMESTAMP}, merge=False)
+
+    return {
+        "success": True,
+        "uid": uid,
+        "decision": decision,
+        "status": reviewed_status,
+        "roleAssignmentId": role_assignment_id,
+    }
+
+
+@https_fn.on_call(invoker="public")
+def submit_programme_application(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_account(req, db)
+    data = _require_data(req)
+    programme_id = _require_string(data, "programmeId")
+
+    startup_id = _clean_string(account.get("entityId"))
+    if (
+        _clean_string(account.get("roleKey")).lower() != "startup"
+        or account.get("entityType") != "company"
+        or not startup_id
+    ):
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="Only startup accounts can submit programme applications.",
+        )
+
+    _get_document_or_error(db, "companies", startup_id, "Startup")
+    programme = _load_programme(db, programme_id)
+    if _clean_string(programme.get("status")) not in {"Open", "Active"}:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="You can only apply to programmes that are Open or Active.",
+        )
+
+    application = _upsert_application_request(db, startup_id, programme_id, account["uid"])
+    return {"application": application}
+
+
+@https_fn.on_call(invoker="public")
+def review_programme_application(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can review programme applications.")
+    data = _require_data(req)
+    application_id = _require_string(data, "applicationId")
+    decision = _require_choice(data, "decision", VALID_DECISIONS)
+
+    application_ref = db.collection("applications").document(application_id)
+    application_doc = application_ref.get()
+    if not application_doc.exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.NOT_FOUND,
+            message="Application not found.",
+        )
+
+    application = {"id": application_doc.id, **application_doc.to_dict()}
+    programme_id = _clean_string(application.get("programmeId"))
+    startup_id = _clean_string(application.get("startupId"))
+    _require_admin_scope_for_programme(db, account, programme_id)
+    current_status = _clean_string(application.get("status"))
+    if current_status not in VALID_APPLICATION_STATUSES:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Application has an unsupported status.",
+        )
+
+    if current_status != "Pending Admin Review":
+        expected_status = "Accepted" if decision == "Approved" else "Rejected"
+        if current_status == expected_status:
+            return {"success": True, "applicationId": application_id, "status": current_status}
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Only pending applications can be reviewed.",
+        )
+
+    next_status = "Accepted" if decision == "Approved" else "Rejected"
+    application_ref.update(
+        {
+            "status": next_status,
+            "reviewedByUid": account["uid"],
+            "reviewedAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+    relationship_id = None
+    if next_status == "Accepted":
+        relationship_id = _ensure_programme_relationship(
+            db,
+            "Startup-to-Programme",
+            startup_id,
+            programme_id,
+            programme_id,
+            "Accepted into programme and onboarded to programme resources.",
+            "applications",
+            application_id,
+        )
+        upsert_graph_edge(
+            db,
+            "Startup",
+            startup_id,
+            "ACCEPTED_INTO",
+            "Programme",
+            programme_id,
+            programme_id=programme_id,
+            created_from="applications",
+            created_from_id=application_id,
+        )
+
+    return {
+        "success": True,
+        "applicationId": application_id,
+        "status": next_status,
+        "relationshipId": relationship_id,
+    }
+
+
+@https_fn.on_call(invoker="public")
+def request_programme_connection(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_account(req, db)
+    data = _require_data(req)
+    programme_id = _require_string(data, "programmeId")
+
+    contributor_id = _clean_string(account.get("entityId"))
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if (
+        account.get("entityType") != "contributor"
+        or role_key not in (CONTRIBUTOR_ROLE_KEYS | {"contributor"})
+        or not contributor_id
+    ):
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="Only contributor accounts can request programme connections.",
+        )
+
+    contributor_doc = _get_document_or_error(db, "contributors", contributor_id, "Contributor")
+    contributor = contributor_doc.to_dict()
+    if _clean_string(contributor.get("status")) == "Suspended":
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="Suspended contributor accounts cannot request programme connections.",
+        )
+
+    programme = _load_programme(db, programme_id)
+    if _clean_string(programme.get("status")) not in {"Open", "Active"}:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="You can only request connections to programmes that are Open or Active.",
+        )
+
+    contributor_type = _clean_string(data.get("contributorType")) or _account_role_to_contributor_type(role_key)
+    if contributor_type not in VALID_CONTRIBUTOR_TYPES:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+            message=f"contributorType must be one of {sorted(VALID_CONTRIBUTOR_TYPES)}.",
+        )
+    request_item = _upsert_programme_connection_request(
+        db,
+        contributor_id,
+        programme_id,
+        contributor_type,
+        account["uid"],
+    )
+    return {"connectionRequest": request_item}
+
+
+@https_fn.on_call(invoker="public")
+def review_programme_connection_request(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can review programme connection requests.")
+    data = _require_data(req)
+    request_id = _require_string(data, "requestId")
+    decision = _require_choice(data, "decision", VALID_DECISIONS)
+
+    request_ref = db.collection("programmeContributors").document(request_id)
+    request_doc = request_ref.get()
+    if not request_doc.exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.NOT_FOUND,
+            message="Programme connection request not found.",
+        )
+
+    request_item = {"id": request_doc.id, **request_doc.to_dict()}
+    programme_id = _clean_string(request_item.get("programmeId"))
+    contributor_id = _clean_string(request_item.get("contributorId"))
+    contributor_type = _clean_string(request_item.get("contributorType"), "Contributor")
+    _require_admin_scope_for_programme(db, account, programme_id)
+    current_status = _clean_string(request_item.get("status"))
+    if current_status not in VALID_POOL_REQUEST_STATUSES:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Programme contributor record has an unsupported status.",
+        )
+
+    if current_status != "Pending Approval":
+        expected_status = "Approved" if decision == "Approved" else "Rejected"
+        if current_status == expected_status:
+            return {"success": True, "requestId": request_id, "status": current_status}
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="Only pending programme connection requests can be reviewed.",
+        )
+
+    next_status = "Approved" if decision == "Approved" else "Rejected"
+    request_ref.update(
+        {
+            "status": next_status,
+            "reviewedByUid": account["uid"],
+            "reviewedAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+    relationship_id = None
+    if next_status == "Approved":
+        relationship_type = f"{contributor_type}-to-Programme"
+        relationship_id = _ensure_programme_relationship(
+            db,
+            relationship_type,
+            contributor_id,
+            programme_id,
+            programme_id,
+            "Contributor attached to the programme pool.",
+            "programmeContributors",
+            request_id,
+        )
+        upsert_graph_edge(
+            db,
+            "Contributor",
+            contributor_id,
+            "ATTACHED_TO",
+            "Programme",
+            programme_id,
+            programme_id=programme_id,
+            created_from="programmeContributors",
+            created_from_id=request_id,
+            metadata={"contributorType": contributor_type},
+        )
+
+    return {
+        "success": True,
+        "requestId": request_id,
+        "status": next_status,
+        "relationshipId": relationship_id,
+    }
+
+
 
 def _get_genai_client():
     from google import genai
 
     api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
+    if not _is_valid_gemini_api_key(api_key):
         raise https_fn.HttpsError(
             code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
             message="GEMINI_API_KEY is not configured.",
@@ -567,8 +1110,17 @@ def _get_genai_client():
     return genai.Client(api_key=api_key)
 
 
+def _is_valid_gemini_api_key(value: str | None) -> bool:
+    token = (value or "").strip()
+    if not token:
+        return False
+    if token.upper() in {"YOUR_API_KEY_HERE", "CHANGE_ME", "PLACEHOLDER"}:
+        return False
+    return True
+
+
 def _has_gemini_api_key() -> bool:
-    return bool(os.environ.get("GEMINI_API_KEY"))
+    return _is_valid_gemini_api_key(os.environ.get("GEMINI_API_KEY"))
 
 
 def _running_in_firestore_emulator() -> bool:
@@ -980,9 +1532,27 @@ def get_embedding(text: str) -> list[float]:
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot_product = np.dot(a, b)
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
+    if not a or not b:
+        return 0.0
+
+    try:
+        left = [float(item) for item in a]
+        right = [float(item) for item in b]
+    except (TypeError, ValueError):
+        return 0.0
+
+    # Live data can contain vectors produced by different embedding pipelines.
+    # Align dimensions defensively to avoid runtime shape errors.
+    if len(left) != len(right):
+        size = min(len(left), len(right))
+        if size == 0:
+            return 0.0
+        left = left[:size]
+        right = right[:size]
+
+    dot_product = np.dot(left, right)
+    norm_a = np.linalg.norm(left)
+    norm_b = np.linalg.norm(right)
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return float(dot_product / (norm_a * norm_b))
@@ -1959,6 +2529,132 @@ def _create_relationship(db, recommendation: dict, expected_outcome: str) -> str
     return doc_id
 
 
+def _ensure_programme_relationship(
+    db,
+    relationship_type: str,
+    source_entity_id: str,
+    target_entity_id: str,
+    programme_id: str,
+    expected_outcome: str,
+    created_from: str,
+    created_from_id: str,
+    match_score: float = 0.0,
+) -> str:
+    existing = _find_existing_relationship(
+        db,
+        relationship_type,
+        source_entity_id,
+        target_entity_id,
+        programme_id,
+    )
+    if existing:
+        return existing["id"]
+
+    doc_id = _relationship_document_id(
+        relationship_type,
+        source_entity_id,
+        target_entity_id,
+        programme_id,
+    )
+    payload = {
+        "id": doc_id,
+        "relationshipType": relationship_type,
+        "sourceEntityId": source_entity_id,
+        "targetEntityId": target_entity_id,
+        "programmeId": programme_id,
+        "createdFrom": created_from,
+        "createdFromId": created_from_id,
+        "matchScore": float(match_score),
+        "status": "Active",
+        "expectedOutcome": expected_outcome,
+        "startDate": datetime.utcnow().date().isoformat(),
+        "createdAt": firestore.SERVER_TIMESTAMP,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    db.collection("relationships").document(doc_id).set(payload, merge=False)
+    return doc_id
+
+
+def _upsert_application_request(
+    db,
+    startup_id: str,
+    programme_id: str,
+    requested_by_uid: str,
+) -> dict[str, Any]:
+    doc_id = f"{startup_id}_{programme_id}"
+    ref = db.collection("applications").document(doc_id)
+    existing = ref.get()
+    if existing.exists:
+        existing_data = existing.to_dict()
+        existing_status = _clean_string(existing_data.get("status"))
+        if existing_status in {"Pending Admin Review", "Accepted"}:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+                message=f"Application already exists with status {existing_status}.",
+            )
+
+    payload = {
+        "id": doc_id,
+        "startupId": startup_id,
+        "programmeId": programme_id,
+        "status": "Pending Admin Review",
+        "createdByUid": requested_by_uid,
+        "requestSource": "DirectRequest",
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    if not existing.exists:
+        payload["createdAt"] = firestore.SERVER_TIMESTAMP
+    ref.set(payload, merge=existing.exists)
+
+    upsert_graph_edge(
+        db,
+        "Startup",
+        startup_id,
+        "APPLIED_TO",
+        "Programme",
+        programme_id,
+        programme_id=programme_id,
+        created_from="applications",
+        created_from_id=doc_id,
+    )
+    return {"id": doc_id, "status": "Pending Admin Review"}
+
+
+def _upsert_programme_connection_request(
+    db,
+    contributor_id: str,
+    programme_id: str,
+    contributor_type: str,
+    requested_by_uid: str,
+) -> dict[str, Any]:
+    doc_id = f"{contributor_id}_{programme_id}"
+    ref = db.collection("programmeContributors").document(doc_id)
+    existing = ref.get()
+    if existing.exists:
+        existing_data = existing.to_dict()
+        existing_status = _clean_string(existing_data.get("status"))
+        if existing_status in {"Pending Approval", "Approved"}:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+                message=f"Programme connection already exists with status {existing_status}.",
+            )
+
+    payload = {
+        "id": doc_id,
+        "programmeId": programme_id,
+        "contributorId": contributor_id,
+        "contributorType": contributor_type,
+        "status": "Pending Approval",
+        "createdByUid": requested_by_uid,
+        "requestSource": "DirectRequest",
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    if not existing.exists:
+        payload["createdAt"] = firestore.SERVER_TIMESTAMP
+    ref.set(payload, merge=existing.exists)
+    return {"id": doc_id, "status": "Pending Approval"}
+
+
 def _materialize_graph_edges_for_approval(db, recommendation: dict, relationship_id: str | None = None):
     rec_type = recommendation["recommendationType"]
     programme_id = recommendation["programmeId"]
@@ -2078,7 +2774,7 @@ def _can_transition_relationship(current_status: str, new_status: str) -> bool:
     return new_status in RELATIONSHIP_TRANSITIONS.get(current_status, set())
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def recommend_programmes_for_startup(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_account(req, db)
@@ -2175,10 +2871,11 @@ def recommend_programmes_for_startup(req: https_fn.CallableRequest):
     return {"recommendations": recommendations}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
     db = _init_firebase()
-    _require_admin(req, db)
+    account = _require_admin(req, db)
+    _require_role(account, {"organisation_admin"}, "Only organisation admins can recommend contributors to programmes.")
     data = _require_data(req)
     contributor_id = _require_string(data, "contributorId")
 
@@ -2256,16 +2953,16 @@ def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
     return {"recommendations": recommendations}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def recommend_mentor_for_startup(req: https_fn.CallableRequest):
+    # Keep this callable as an authenticated Firebase client endpoint.
     db = _init_firebase()
-    account = _require_account(req, db)
+    account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can recommend mentors for startups.")
     data = _require_data(req)
     startup_id = _require_string(data, "startupId")
-    _require_startup_owner_or_admin(account, startup_id)
     programme_id = _require_string(data, "programmeId")
-    if _is_admin_account(account):
-        _require_admin_scope_for_programme(db, account, programme_id)
+    _require_admin_scope_for_programme(db, account, programme_id)
 
     startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
     programme_doc = _get_document_or_error(db, "programmes", programme_id, "Programme")
@@ -2356,10 +3053,11 @@ def recommend_mentor_for_startup(req: https_fn.CallableRequest):
     return {"recommendations": recommendations}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def review_recommendation(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can review recommendations.")
     data = _require_data(req)
     recommendation_id = _require_string(data, "recommendationId")
     decision = _require_choice(data, "decision", VALID_DECISIONS)
@@ -2407,10 +3105,11 @@ def review_recommendation(req: https_fn.CallableRequest):
     return {"success": True, "recommendationId": recommendation_id, "decision": decision, "createdId": created_id}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def update_relationship_status(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can update relationship status.")
     data = _require_data(req)
     relationship_id = _require_string(data, "relationshipId")
     new_status = _require_choice(data, "newStatus", VALID_RELATIONSHIP_STATUSES)
@@ -2439,10 +3138,11 @@ def update_relationship_status(req: https_fn.CallableRequest):
     return {"success": True, "relationshipId": relationship_id, "newStatus": new_status}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def submit_outcome(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_admin(req, db)
+    _require_role(account, {"programme_admin"}, "Only programme admins can submit outcomes.")
     data = _require_data(req)
     relationship_id = _require_string(data, "relationshipId")
     outcome_achieved = _require_choice(data, "outcomeAchieved", VALID_OUTCOME_ACHIEVEMENTS)
@@ -2643,7 +3343,7 @@ def _build_ai_insights_fallback(stats: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def summarise_startup_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
     account = _require_account(req, db)
@@ -2663,7 +3363,7 @@ def summarise_startup_profile(req: https_fn.CallableRequest):
     return {"startupId": startup_id, "profile": profile}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def summarise_company_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
     data = _require_data(req)
@@ -2681,13 +3381,12 @@ def summarise_company_profile(req: https_fn.CallableRequest):
     return {"startupId": company_id, "profile": profile}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def get_programme_graph_view(req: https_fn.CallableRequest):
     db = _init_firebase()
-    account = _require_admin(req, db)
     data = _require_data(req)
     programme_id = _require_string(data, "programmeId")
-    _require_admin_scope_for_programme(db, account, programme_id)
+    _require_programme_graph_viewer(req, db, programme_id)
     subgraph = get_programme_subgraph(db, programme_id)
     graph_insights = _programme_graph_gaps(subgraph)
     return {
@@ -2701,7 +3400,7 @@ def get_programme_graph_view(req: https_fn.CallableRequest):
     }
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def get_ai_insights(req: https_fn.CallableRequest):
     db = _init_firebase()
     _require_admin(req, db)
@@ -2799,7 +3498,7 @@ def get_ai_insights(req: https_fn.CallableRequest):
     return {"insights": insights, "stats": stats}
 
 
-@https_fn.on_call()
+@https_fn.on_call(invoker="public")
 def get_dashboard_stats(req: https_fn.CallableRequest):
     db = _init_firebase()
     _require_admin(req, db)
@@ -2834,4 +3533,150 @@ def get_dashboard_stats(req: https_fn.CallableRequest):
         "activeRelationships": len([rel for rel in relationships if rel.get("status") == "Active"]),
         "completedRelationships": len([rel for rel in relationships if rel.get("status") == "Completed"]),
         "outcomeSuccessRate": success_rate,
+    }
+
+
+@https_fn.on_call(invoker="public")
+def get_recommendation_queue(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_account(req, db)
+    data = _require_data(req)
+
+    status_filter = _clean_string(data.get("status"))
+    type_filter = _clean_string(data.get("type"))
+    programme_filter = _clean_string(data.get("programmeId"))
+    items = _list_recommendation_queue(db, account, status_filter, type_filter, programme_filter)
+    return {"items": items}
+
+
+@https_fn.on_call(invoker="public")
+def get_dashboard_overview(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_account(req, db)
+    _require_data(req)
+
+    role_key = _clean_string(account.get("roleKey")).lower()
+    accessible_programme_ids = _programme_ids_for_admin(db, account) if _is_admin_account(account) else set()
+
+    total_organisations = 0
+    open_programmes = 0
+    total_startups = 0
+    verified_startups = 0
+    total_contributors = 0
+    programme_pool_assignments = 0
+    pending_applications = 0
+    accepted_applications = 0
+    pending_recommendations = 0
+    pending_connection_requests = 0
+    awaiting_outcomes = 0
+    active_relationships = 0
+    completed_relationships = 0
+    outcome_success_rate = 0.0
+    pending_registrations = 0
+
+    if _is_admin_account(account):
+        if role_key == "platform_admin":
+            total_organisations = sum(1 for _ in db.collection("organisations").stream())
+            pending_registrations = sum(
+                1 for doc in db.collection("accounts").where("status", "==", "Pending").stream()
+            )
+
+        startups = [doc.to_dict() for doc in db.collection("companies").stream()]
+        contributors = [doc.to_dict() for doc in db.collection("contributors").stream()]
+        total_startups = len(startups)
+        verified_startups = len([item for item in startups if item.get("verificationStatus") == "Verified"])
+        total_contributors = len(contributors)
+
+        programmes = []
+        for doc in db.collection("programmes").stream():
+            if role_key != "platform_admin" and doc.id not in accessible_programme_ids:
+                continue
+            programmes.append({"id": doc.id, **doc.to_dict()})
+        open_programmes = len([item for item in programmes if item.get("status") in {"Open", "Active"}])
+
+        applications = []
+        for doc in db.collection("applications").stream():
+            row = doc.to_dict()
+            if role_key != "platform_admin" and _clean_string(row.get("programmeId")) not in accessible_programme_ids:
+                continue
+            applications.append({"id": doc.id, **row})
+        pending_applications = len([item for item in applications if item.get("status") == "Pending Admin Review"])
+        accepted_applications = len([item for item in applications if item.get("status") == "Accepted"])
+
+        pools = []
+        for doc in db.collection("programmeContributors").stream():
+            row = doc.to_dict()
+            if role_key != "platform_admin" and _clean_string(row.get("programmeId")) not in accessible_programme_ids:
+                continue
+            pools.append(row)
+        programme_pool_assignments = len([item for item in pools if item.get("status") == "Approved"])
+        pending_connection_requests = len([item for item in pools if item.get("status") == "Pending Approval"])
+
+        recommendations = []
+        for doc in db.collection("recommendations").stream():
+            row = {"id": doc.id, **doc.to_dict()}
+            programme_id = _clean_string(row.get("programmeId"))
+            if role_key == "programme_admin" and programme_id not in accessible_programme_ids:
+                continue
+            recommendations.append(row)
+        pending_recommendations = len(
+            [
+                rec
+                for rec in recommendations
+                if _can_review_recommendation(account, rec, accessible_programme_ids)[0]
+            ]
+        )
+
+        relationships = []
+        for doc in db.collection("relationships").stream():
+            row = {"id": doc.id, **doc.to_dict()}
+            if role_key != "platform_admin" and _clean_string(row.get("programmeId")) not in accessible_programme_ids:
+                continue
+            relationships.append(row)
+        active_relationships = len([item for item in relationships if item.get("status") == "Active"])
+        completed_relationships = len([item for item in relationships if item.get("status") == "Completed"])
+
+        outcomes = []
+        for doc in db.collection("outcomes").stream():
+            row = {"id": doc.id, **doc.to_dict()}
+            rel_id = _clean_string(row.get("relationshipId"))
+            relationship = next((item for item in relationships if item.get("id") == rel_id), None)
+            if role_key != "platform_admin" and relationship is None:
+                continue
+            outcomes.append(row)
+
+        if outcomes:
+            successful = len([item for item in outcomes if item.get("outcomeAchieved") == "Yes"])
+            outcome_success_rate = round((successful / len(outcomes)) * 100, 1)
+
+        outcome_relationship_ids = {_clean_string(item.get("relationshipId")) for item in outcomes if _clean_string(item.get("relationshipId"))}
+        awaiting_outcomes = len(
+            [
+                item
+                for item in relationships
+                if item.get("status") in {"Active", "Completed"} and _clean_string(item.get("id")) not in outcome_relationship_ids
+            ]
+        )
+
+    recent_queue = _list_recommendation_queue(db, account, status_filter="Pending Approval")[:5]
+
+    return {
+        "stats": {
+            "totalOrganisations": total_organisations,
+            "openProgrammes": open_programmes,
+            "totalStartups": total_startups,
+            "verifiedStartups": verified_startups,
+            "totalContributors": total_contributors,
+            "programmePoolAssignments": programme_pool_assignments,
+            "pendingApplications": pending_applications,
+            "acceptedApplications": accepted_applications,
+            "pendingRecommendations": pending_recommendations,
+            "activeRelationships": active_relationships,
+            "completedRelationships": completed_relationships,
+            "outcomeSuccessRate": outcome_success_rate,
+            "pendingRegistrations": pending_registrations,
+            "pendingConnectionRequests": pending_connection_requests,
+            "awaitingOutcomes": awaiting_outcomes,
+        },
+        "recentQueue": recent_queue,
     }

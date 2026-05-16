@@ -1,33 +1,5 @@
-import { NavLink } from 'react-router-dom';
-
-const adminNav = [
-  { to: '/', icon: 'dashboard', label: 'Dashboard' },
-  { to: '/programmes', icon: 'school', label: 'Programmes' },
-  { to: '/companies', icon: 'business', label: 'Startups' },
-  { to: '/contributors', icon: 'groups', label: 'Contributors' },
-  { to: '/matches', icon: 'handshake', label: 'Recommendations' },
-  { to: '/outcomes', icon: 'rate_review', label: 'Outcomes' },
-  { to: '/insights', icon: 'insights', label: 'Insights' },
-  { to: '/settings', icon: 'settings', label: 'Settings' },
-  { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
-];
-
-const companyNav = [
-  { to: '/', icon: 'home', label: 'My Programmes' },
-  { to: '/programmes', icon: 'school', label: 'Browse Programmes' },
-  { to: '/contributors', icon: 'groups', label: 'Programme Contributors' },
-  { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
-];
-
-const contributorNav = [
-  { to: '/', icon: 'assignment', label: 'Programme Assignments' },
-  { to: '/programmes', icon: 'school', label: 'Browse Programmes' },
-  { to: '/companies', icon: 'business', label: 'Browse Startups' },
-  { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
-];
-
-const ADMIN_ROLES = new Set(['platform_admin', 'organisation_admin', 'programme_admin', 'admin']);
-const CONTRIBUTOR_ROLES = new Set(['mentor', 'partner', 'investor', 'service_provider', 'contributor']);
+import { Link, useLocation } from 'react-router-dom';
+import { getSidebarItems } from '../config/accessPolicy';
 
 function roleLabel(roleKey) {
   const map = {
@@ -46,10 +18,18 @@ function roleLabel(roleKey) {
 }
 
 export default function Sidebar({ user, onLogout }) {
-  const isAdmin = ADMIN_ROLES.has(user.roleKey);
-  const isStartup = user.roleKey === 'startup';
-  const isContributor = CONTRIBUTOR_ROLES.has(user.roleKey);
-  const nav = isAdmin ? adminNav : isStartup ? companyNav : isContributor ? contributorNav : companyNav;
+  const nav = getSidebarItems(user.roleKey);
+  const location = useLocation();
+
+  function isActive(itemTo) {
+    const target = new URL(itemTo, 'http://local');
+    const current = new URL(`${location.pathname}${location.search}`, 'http://local');
+    const targetTab = target.searchParams.get('tab');
+    const currentTab = current.searchParams.get('tab');
+    if (target.pathname !== current.pathname) return false;
+    if (targetTab) return targetTab === currentTab;
+    return true;
+  }
 
   return (
     <aside className="app-sidebar">
@@ -63,16 +43,15 @@ export default function Sidebar({ user, onLogout }) {
 
       <nav className="sidebar-nav-list">
         {nav.map((item) => (
-          <NavLink
+          <Link
             key={item.to}
             to={item.to}
-            end={item.to === '/'}
-            className={({ isActive }) => `sidebar-nav-link ${isActive ? 'active' : ''}`}
+            className={`sidebar-nav-link ${isActive(item.to) ? 'active' : ''}`}
           >
             <span className="material-symbols-outlined">{item.icon}</span>
             <span>{item.label}</span>
             {item.capabilityTag ? <span className="nav-capability-tag">{item.capabilityTag}</span> : null}
-          </NavLink>
+          </Link>
         ))}
       </nav>
 

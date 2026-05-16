@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { collection, doc, getDoc, getDocs, query, where, updateDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
+import { getDashboardTabs } from '../config/accessPolicy';
 
 export default function CompanyDashboard({ user }) {
   const [company, setCompany] = useState(null);
@@ -15,7 +17,7 @@ export default function CompanyDashboard({ user }) {
   const [programmeNames, setProgrammeNames] = useState({});
   const [contributorNames, setContributorNames] = useState({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [saving, setSaving] = useState(false);
@@ -62,14 +64,26 @@ export default function CompanyDashboard({ user }) {
   async function applyToProgramme(programmeId) {
     setApplying(programmeId);
     try {
-      const fn = httpsCallable(functions, 'recommend_programmes_for_startup');
-      await fn({ startupId: user.id });
+      const submit = httpsCallable(functions, 'submit_programme_application');
+      await submit({ programmeId });
       // Refresh applications
       const aSnap = await getDocs(query(collection(db, 'applications'), where('startupId', '==', user.id)));
       const al = []; aSnap.forEach((d) => al.push({ id: d.id, ...d.data() })); setApplications(al);
-    } catch (e) { console.error(e); alert('Failed to apply.'); }
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || 'Failed to apply to programme.');
+    }
     setApplying('');
   }
+
+  const tabs = getDashboardTabs(user?.roleKey || 'startup');
+  const activeTab = tabs.some((tab) => tab.id === searchParams.get('tab')) ? searchParams.get('tab') : 'overview';
+
+  useEffect(() => {
+    if (!searchParams.get('tab')) {
+      setSearchParams({ tab: 'overview' }, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   if (loading) return <Spinner />;
 
@@ -77,14 +91,6 @@ export default function CompanyDashboard({ user }) {
   const mentorRels = relationships.filter((r) => r.relationshipType === 'Startup-to-Mentor');
   const appliedProgrammeIds = new Set(applications.map((a) => a.programmeId));
   const openProgrammes = programmes.filter((p) => (p.status === 'Open' || p.status === 'Active') && !appliedProgrammeIds.has(p.id));
-
-  const tabs = [
-    { id: 'overview', label: 'Overview', icon: 'dashboard' },
-    { id: 'profile', label: 'Edit Profile', icon: 'edit' },
-    { id: 'browse', label: 'Browse Programmes', icon: 'school' },
-    { id: 'mentors', label: 'Mentor Pathway', icon: 'handshake' },
-    { id: 'resources', label: 'Resources', icon: 'folder_open' },
-  ];
 
   return (
     <div>
@@ -108,7 +114,7 @@ export default function CompanyDashboard({ user }) {
 
       <div className="filter-bar" style={{ marginBottom: 24 }}>
         {tabs.map((t) => (
-          <button key={t.id} className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`} onClick={() => setActiveTab(t.id)}>
+          <button key={t.id} className={`btn ${activeTab === t.id ? 'btn-primary' : 'btn-outline'}`} onClick={() => setSearchParams({ tab: t.id })}>
             <span className="material-symbols-outlined" style={{ fontSize: 16 }}>{t.icon}</span> {t.label}
           </button>
         ))}

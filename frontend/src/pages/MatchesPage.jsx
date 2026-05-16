@@ -1,50 +1,51 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, functions } from '../firebase';
+import { useSearchParams } from 'react-router-dom';
+import { functions } from '../firebase';
 import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
 import { RoleAccessBanner } from '../components/FeatureVisibility';
 import { trackRoleFeatureEvent } from '../services/telemetry';
+import { canPerformAction } from '../config/accessPolicy';
 
 export default function MatchesPage({ user }) {
   const [recommendations, setRecommendations] = useState([]);
-  const [startups, setStartups] = useState({});
-  const [contributors, setContributors] = useState({});
-  const [programmes, setProgrammes] = useState({});
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState('');
-  const [filterType, setFilterType] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [hiddenNonActionableCount, setHiddenNonActionableCount] = useState(0);
 
   useEffect(() => {
     async function load() {
-      const [startupSnap, contributorSnap, programmeSnap, recSnap] = await Promise.all([
-        getDocs(collection(db, 'companies')),
-        getDocs(collection(db, 'contributors')),
-        getDocs(collection(db, 'programmes')),
-        getDocs(collection(db, 'recommendations')),
-      ]);
-
-      const startupMap = {};
-      startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
-      const contributorMap = {};
-      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
-      const programmeMap = {};
-      programmeSnap.forEach((item) => { programmeMap[item.id] = item.data().name; });
-
-      const recList = [];
-      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
-
-      setStartups(startupMap);
-      setContributors(contributorMap);
-      setProgrammes(programmeMap);
-      setRecommendations(recList);
-      setLoading(false);
+      setLoading(true);
+      try {
+        const getQueue = httpsCallable(functions, 'get_recommendation_queue');
+        const result = await getQueue({
+          status: searchParams.get('status') || '',
+          type: searchParams.get('type') || '',
+          programmeId: searchParams.get('programmeId') || '',
+        });
+        const items = result.data?.items || [];
+        setRecommendations(items);
+        const hiddenCount = items.filter((item) => !item.canReview && item.status === 'Pending Approval').length;
+        setHiddenNonActionableCount(hiddenCount);
+        trackRoleFeatureEvent('client_hidden_unreviewable', { count: hiddenCount });
+      } catch (error) {
+        trackRoleFeatureEvent('permission_denied_by_backend', { action: 'get_recommendation_queue', message: error?.message || 'unknown' });
+        console.error('Failed to load recommendation queue:', error);
+        setRecommendations([]);
+      } finally {
+        setLoading(false);
+      }
     }
     load();
-  }, []);
+  }, [searchParams]);
 
   async function handleDecision(recommendationId, decision) {
     try {
+      const target = recommendations.find((item) => item.id === recommendationId);
+      if (!target?.canReview) {
+        trackRoleFeatureEvent('client_hidden_unreviewable', { recommendationId, decision, reason: target?.scopeReason || 'unknown' });
+        return;
+      }
       const review = httpsCallable(functions, 'review_recommendation');
       await review({ recommendationId, decision });
       trackRoleFeatureEvent('recommendation_review_success', { recommendationId, decision });
@@ -53,18 +54,30 @@ export default function MatchesPage({ user }) {
       );
     } catch (error) {
       console.error('Failed to review recommendation:', error);
-      trackRoleFeatureEvent('permission_attempt_failed', { action: 'review_recommendation', recommendationId, decision });
+      trackRoleFeatureEvent('permission_denied_by_backend', { action: 'review_recommendation', recommendationId, decision, message: error?.message || 'unknown' });
       alert('Failed to review recommendation. Check the function logs.');
     }
   }
 
   if (loading) return <Spinner />;
 
-  const types = [...new Set(recommendations.map((item) => item.recommendationType))];
-  let filtered = recommendations;
-  if (filterStatus) filtered = filtered.filter((item) => item.status === filterStatus);
-  if (filterType) filtered = filtered.filter((item) => item.recommendationType === filterType);
-  filtered = [...filtered].sort((left, right) => (right.matchScore || 0) - (left.matchScore || 0));
+  const filterStatus = searchParams.get('status') || '';
+  const filterType = searchParams.get('type') || '';
+  const filterProgrammeId = searchParams.get('programmeId') || '';
+  const types = [...new Set(recommendations.map((item) => item.recommendationType).filter(Boolean))];
+  const programmeOptions = [...new Set(recommendations.map((item) => item.programmeId).filter(Boolean))];
+  const canReviewRecommendations = canPerformAction(user?.roleKey, 'review_recommendation');
+
+  function updateSearch(next) {
+    const params = new URLSearchParams(searchParams);
+    Object.entries(next).forEach(([key, value]) => {
+      if (!value) params.delete(key);
+      else params.set(key, value);
+    });
+    setSearchParams(params);
+  }
+
+  const filtered = [...recommendations].sort((left, right) => (right.matchScore || 0) - (left.matchScore || 0));
 
   return (
     <div>
@@ -95,18 +108,27 @@ export default function MatchesPage({ user }) {
       <div className="page-header">
         <h2>Recommendation Queue</h2>
         <p>{recommendations.length} recommendation records across admissions, programme pools, and mentor assignment workflows</p>
+        {hiddenNonActionableCount > 0 ? (
+          <p className="cell-muted" style={{ marginTop: 6 }}>{hiddenNonActionableCount} pending items are read-only due to scope.</p>
+        ) : null}
       </div>
 
       <div className="filter-bar">
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+        <select value={filterStatus} onChange={(e) => updateSearch({ status: e.target.value })}>
           <option value="">All Statuses</option>
           <option value="Pending Approval">Pending Approval</option>
           <option value="Approved">Approved</option>
           <option value="Rejected">Rejected</option>
         </select>
-        <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+        <select value={filterType} onChange={(e) => updateSearch({ type: e.target.value })}>
           <option value="">All Recommendation Types</option>
           {types.map((item) => <option key={item} value={item}>{item}</option>)}
+        </select>
+        <select value={filterProgrammeId} onChange={(e) => updateSearch({ programmeId: e.target.value })}>
+          <option value="">All Programmes</option>
+          {programmeOptions.map((programmeId) => (
+            <option key={programmeId} value={programmeId}>{recommendations.find((item) => item.programmeId === programmeId)?.programmeName || programmeId}</option>
+          ))}
         </select>
       </div>
 
@@ -119,7 +141,7 @@ export default function MatchesPage({ user }) {
               <div className="stack-item-header">
                 <div>
                   <h4>{item.recommendationType}</h4>
-                  <div className="stack-item-meta">{programmes[item.programmeId] || item.programmeId}</div>
+                  <div className="stack-item-meta">{item.programmeName || item.programmeId}</div>
                 </div>
                 <ScoreBadge score={item.matchScore} label="AI confidence" />
               </div>
@@ -128,11 +150,11 @@ export default function MatchesPage({ user }) {
               </div>
               <div className="recommendation-meta-line">
                 <span className="meta-term">Source</span>
-                <span>{startups[item.sourceEntityId] || contributors[item.sourceEntityId] || programmes[item.sourceEntityId] || item.sourceEntityId}</span>
+                <span>{item.sourceLabel || item.sourceEntityId}</span>
               </div>
               <div className="recommendation-meta-line">
                 <span className="meta-term">Target</span>
-                <span>{startups[item.targetEntityId] || contributors[item.targetEntityId] || programmes[item.targetEntityId] || item.targetEntityId}</span>
+                <span>{item.targetLabel || item.targetEntityId}</span>
               </div>
               <ScoreBreakdown breakdown={item.scoreBreakdown} />
               <p className="recommendation-copy">{item.explanation}</p>
@@ -142,7 +164,7 @@ export default function MatchesPage({ user }) {
                 </div>
               ) : null}
               <GraphEvidence evidence={item.graphEvidence} />
-              {item.status === 'Pending Approval' ? (
+              {item.status === 'Pending Approval' && canReviewRecommendations && item.canReview ? (
                 <div className="recommendation-actions">
                   <button className="btn btn-sm btn-success" onClick={() => handleDecision(item.id, 'Approved')}>
                     Approve
@@ -153,7 +175,11 @@ export default function MatchesPage({ user }) {
                 </div>
               ) : (
                 <div className="recommendation-actions">
-                  <span className="review-note">Recommendation already reviewed</span>
+                  <span className="review-note">
+                    {item.status === 'Pending Approval'
+                      ? (item.scopeReason === 'out_of_scope' ? 'Out of scope' : 'Read-only')
+                      : 'Recommendation already reviewed'}
+                  </span>
                 </div>
               )}
             </div>
