@@ -1,7 +1,11 @@
-import { useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { auth, db, usingEmulators } from './firebase';
 import Sidebar from './components/Sidebar';
 import LoginPage from './pages/LoginPage';
+import PendingAccountPage from './pages/PendingAccountPage';
 import DashboardPage from './pages/DashboardPage';
 import CompanyDashboard from './pages/CompanyDashboard';
 import ContributorDashboard from './pages/ContributorDashboard';
@@ -12,46 +16,181 @@ import MatchesPage from './pages/MatchesPage';
 import InsightsPage from './pages/InsightsPage';
 import ProgrammesPage from './pages/ProgrammesPage';
 import ProgrammeDetailPage from './pages/ProgrammeDetailPage';
+import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
+import SettingsPage from './pages/SettingsPage';
+import CreateProgrammePage from './pages/CreateProgrammePage';
+import OutcomesPage from './pages/OutcomesPage';
+
+function mapAccountToUser(firebaseUser, account) {
+  let role = 'admin';
+  if (account.accountType === 'startup') role = 'company';
+  if (account.accountType === 'contributor') role = 'contributor';
+
+  return {
+    uid: firebaseUser.uid,
+    email: firebaseUser.email,
+    accountType: account.accountType,
+    entityType: account.entityType,
+    role,
+    id: account.entityId,
+    name: account.displayName || firebaseUser.email || 'Lattice Account',
+    status: account.status || 'Pending',
+  };
+}
+
+async function loadAccountWithRetry(uid, attempts = 8, delayMs = 300) {
+  const accountRef = doc(db, 'accounts', uid);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const accountSnap = await getDoc(accountRef);
+    if (accountSnap.exists()) return { ref: accountRef, snap: accountSnap };
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+  }
+  return { ref: accountRef, snap: null };
+}
+
+function AuthLoadingPanel() {
+  return (
+    <div className="auth-loading-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: 'var(--color-bg-base)' }}>
+      <div className="auth-loading-card" style={{ padding: 40, background: 'var(--color-surface)', borderRadius: 12, border: '1px solid var(--color-border)', textAlign: 'center' }}>
+        <div className="hero-kicker" style={{ color: 'var(--color-primary)', background: 'var(--color-primary-bg)', marginBottom: 16, display: 'inline-block', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
+          Lattice Access
+        </div>
+        <h1 style={{ marginBottom: 12, fontSize: 24 }}>Opening workspace</h1>
+        <p style={{ color: 'var(--color-text-secondary)', marginBottom: 24 }}>Checking the signed-in account before loading programme data.</p>
+        <div className="spinner" style={{ margin: '0 auto' }} />
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState('');
 
-  if (!user) {
-    return <LoginPage onLogin={(u) => setUser(u)} />;
-  }
+  useEffect(() => {
+    let initialResolved = false;
+    const timeoutId = usingEmulators ? window.setTimeout(() => {
+      if (initialResolved) return;
+      initialResolved = true;
+      setUser(null);
+      setAuthError('Firebase Auth emulator is not reachable. Start Firebase emulators to use demo login or registration.');
+      setAuthReady(true);
+    }, 2500) : null;
 
-  // Determine home page based on role
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!initialResolved) {
+        initialResolved = true;
+        if (timeoutId) window.clearTimeout(timeoutId);
+      }
+      setAuthError('');
+      if (!firebaseUser) {
+        setUser(null);
+        setAuthReady(true);
+        return;
+      }
+
+      try {
+        const { ref: accountRef, snap: accountSnap } = await loadAccountWithRetry(firebaseUser.uid);
+        if (!accountSnap) {
+          setUser(null);
+          setAuthError('This login exists in Firebase Auth but has no Lattice account mapping yet.');
+          setAuthReady(true);
+          return;
+        }
+
+        const account = accountSnap.data();
+        setUser(mapAccountToUser(firebaseUser, account));
+        setAuthReady(true);
+        updateDoc(accountRef, { lastLoginAt: serverTimestamp() }).catch(() => {});
+      } catch (error) {
+        console.error('Failed to load account:', error);
+        setUser(null);
+        setAuthError('Could not load the Lattice account for this login.');
+        setAuthReady(true);
+      }
+    });
+
+    if (usingEmulators) {
+      fetch('http://127.0.0.1:9099/', { mode: 'no-cors' }).catch(() => {
+        setAuthError((current) => current || 'Firebase Auth emulator is not reachable. Start Firebase emulators to use demo login or registration.');
+        setAuthReady(true);
+      });
+    }
+
+    return () => {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      unsubscribe();
+    };
+  }, []);
+
+  if (!authReady) return <AuthLoadingPanel />;
+  if (!user) return <LoginPage authError={authError} />;
+  if (user.status !== 'Active') return <PendingAccountPage user={user} onLogout={() => signOut(auth)} />;
+
   let Home = DashboardPage;
   if (user.role === 'company') Home = () => <CompanyDashboard user={user} />;
   if (user.role === 'contributor') Home = () => <ContributorDashboard user={user} />;
 
+  const handleLogout = () => signOut(auth);
+
   return (
     <BrowserRouter>
       <div className="app-layout">
-        <Sidebar user={user} onLogout={() => setUser(null)} />
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            
-            {/* Admin only routes */}
-            {user.role === 'admin' && (
-              <>
+        <Sidebar user={user} onLogout={handleLogout} />
+        <div className="app-main">
+          <header className="app-header">
+            <div className="search-wrap" style={{ maxWidth: 420 }}>
+              <span className="material-symbols-outlined">search</span>
+              <input className="filter-input" placeholder="Search startups, programmes, or contributors..." style={{ width: '100%', paddingLeft: 34 }} />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button className="sidebar-logout-btn"><span className="material-symbols-outlined">notifications</span></button>
+              <button className="sidebar-logout-btn"><span className="material-symbols-outlined">help_outline</span></button>
+              <button className="sidebar-logout-btn" onClick={handleLogout} title="Logout">
+                <span className="material-symbols-outlined">logout</span>
+              </button>
+            </div>
+          </header>
+          <main className="app-page">
+            <Routes>
+              <Route path="/" element={<Home />} />
+              {user.role === 'admin' && <>
                 <Route path="/matches" element={<MatchesPage />} />
                 <Route path="/insights" element={<InsightsPage />} />
-              </>
-            )}
-
-            {/* Shared routes */}
-            <Route path="/companies" element={<CompaniesPage />} />
-            <Route path="/companies/:id" element={<CompanyDetailPage />} />
-            <Route path="/contributors" element={<ContributorsPage />} />
-            <Route path="/programmes" element={<ProgrammesPage />} />
-            <Route path="/programmes/:id" element={<ProgrammeDetailPage />} />
-
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/outcomes" element={<OutcomesPage />} />
+                <Route path="/programmes/create" element={<CreateProgrammePage />} />
+              </>}
+              <Route path="/companies" element={<CompaniesPage />} />
+              <Route path="/companies/:id" element={<CompanyDetailPage />} />
+              <Route path="/contributors" element={<ContributorsPage />} />
+              <Route path="/programmes" element={<ProgrammesPage />} />
+              <Route path="/programmes/:id" element={<ProgrammeDetailPage />} />
+              <Route path="/privacy" element={<PrivacyPolicyPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </main>
+          <footer className="app-footer">
+            <span>© {new Date().getFullYear()} Lattice Ecosystem Platform. All rights reserved.</span>
+            <div className="footer-links">
+              <Link to="/privacy">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>shield</span>
+                Privacy Policy
+              </Link>
+              <a href="mailto:support@lattice-platform.io">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>mail</span>
+                Contact
+              </a>
+              <a href="https://github.com" target="_blank" rel="noopener noreferrer">
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>code</span>
+                GitHub
+              </a>
+            </div>
+          </footer>
+        </div>
       </div>
     </BrowserRouter>
   );

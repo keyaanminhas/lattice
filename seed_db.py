@@ -1,13 +1,14 @@
 import os
 
 import firebase_admin
+from firebase_admin import auth as firebase_auth
 from firebase_admin import firestore as admin_firestore
 from google.cloud import firestore as google_firestore
 
 USE_FIRESTORE_EMULATOR = os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}
-
 if USE_FIRESTORE_EMULATOR:
     os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"
+    os.environ.setdefault("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:9099")
 
 if USE_FIRESTORE_EMULATOR:
     from google.auth.credentials import AnonymousCredentials
@@ -26,6 +27,7 @@ else:
     SERVER_TIMESTAMP = admin_firestore.SERVER_TIMESTAMP
 
 MANAGED_COLLECTIONS = [
+    "accounts",
     "graph_edges",
     "outcomes",
     "relationships",
@@ -36,6 +38,39 @@ MANAGED_COLLECTIONS = [
     "companies",
     "programmes",
     "organisations",
+]
+
+DEMO_LOGINS = [
+    {
+        "uid": "demo-admin",
+        "email": "admin@lattice.demo",
+        "password": "lattice-demo-admin",
+        "display_name": "Cradle Fund Admin",
+        "account_type": "organisation",
+        "entity_type": "organisation",
+        "entity_id": "org-1",
+        "status": "Active",
+    },
+    {
+        "uid": "demo-startup",
+        "email": "startup@lattice.demo",
+        "password": "lattice-demo-startup",
+        "display_name": "MediScan AI",
+        "account_type": "startup",
+        "entity_type": "company",
+        "entity_id": "comp-1",
+        "status": "Active",
+    },
+    {
+        "uid": "demo-contributor",
+        "email": "contributor@lattice.demo",
+        "password": "lattice-demo-contributor",
+        "display_name": "Dr. Sarah Lim",
+        "account_type": "contributor",
+        "entity_type": "contributor",
+        "entity_id": "cont-1",
+        "status": "Active",
+    },
 ]
 
 
@@ -67,6 +102,56 @@ def seed_collection(name: str, records: list[dict]):
     for record in records:
         db.collection(name).document(record["id"]).set(record)
 
+
+def account(uid: str, email: str, display_name: str, account_type: str, entity_type: str, entity_id: str, status: str):
+    return _with_created_updated(
+        {
+            "id": uid,
+            "accountType": account_type,
+            "entityType": entity_type,
+            "entityId": entity_id,
+            "displayName": display_name,
+            "email": email,
+            "status": status,
+        }
+    )
+
+
+def sync_demo_auth_users():
+    auth_emulator_host = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST", "").strip()
+    if not auth_emulator_host:
+        print("Skipping demo Auth user sync because FIREBASE_AUTH_EMULATOR_HOST is not set.")
+        return
+
+    print(f"Syncing demo Firebase Auth users in emulator at {auth_emulator_host}...")
+    for login in DEMO_LOGINS:
+        existing = None
+        try:
+            existing = firebase_auth.get_user(login["uid"])
+        except firebase_auth.UserNotFoundError:
+            try:
+                same_email_user = firebase_auth.get_user_by_email(login["email"])
+            except firebase_auth.UserNotFoundError:
+                same_email_user = None
+            if same_email_user and same_email_user.uid != login["uid"]:
+                firebase_auth.delete_user(same_email_user.uid)
+
+        if existing:
+            firebase_auth.update_user(
+                login["uid"],
+                email=login["email"],
+                password=login["password"],
+                display_name=login["display_name"],
+                disabled=False,
+            )
+        else:
+            firebase_auth.create_user(
+                uid=login["uid"],
+                email=login["email"],
+                password=login["password"],
+                display_name=login["display_name"],
+                disabled=False,
+            )
 
 def organisation(org_id: str, name: str, org_type: str, roles: list[str], country: str, focus_areas: list[str], status: str):
     return _with_created(
@@ -1701,7 +1786,28 @@ def build_seed_data():
             )
         )
 
+    for startup in companies:
+        if startup["id"] == "comp-1":
+            startup["authUid"] = "demo-startup"
+    for contributor_record in contributors:
+        if contributor_record["id"] == "cont-1":
+            contributor_record["authUid"] = "demo-contributor"
+
+    accounts = [
+        account(
+            login["uid"],
+            login["email"],
+            login["display_name"],
+            login["account_type"],
+            login["entity_type"],
+            login["entity_id"],
+            login["status"],
+        )
+        for login in DEMO_LOGINS
+    ]
+
     return {
+        "accounts": accounts,
         "organisations": organisations,
         "programmes": programmes,
         "companies": companies,
@@ -1724,9 +1830,11 @@ def seed_data():
     print("Seeding expanded Lattice ecosystem dataset...")
     for collection_name in MANAGED_COLLECTIONS[::-1]:
         seed_collection(collection_name, dataset.get(collection_name, []))
+    sync_demo_auth_users()
 
     print(
         "Seed complete with "
+        f"{len(dataset['accounts'])} accounts, "
         f"{len(dataset['organisations'])} organisations, "
         f"{len(dataset['programmes'])} programmes, "
         f"{len(dataset['companies'])} companies, "

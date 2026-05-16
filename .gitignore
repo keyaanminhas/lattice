@@ -67,3 +67,10 @@ node_modules/
 
 # dataconnect generated files
 .dataconnect
+
+# Local verification artifacts and generated credential exports
+__pycache__/
+frontend/test-results/
+frontend/playwright-*.png
+live_entity_accounts_*.csv
+live_account_usernames_passwords_roles.csv

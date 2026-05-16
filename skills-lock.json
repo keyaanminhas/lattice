@@ -90,6 +90,12 @@
       "sourceType": "github",
       "skillPath": "skills/xcode-project-setup/SKILL.md",
       "computedHash": "c212c4e08f0d2bbd4a2a61278a9a030e3da1227c0fe57022ed54d1c3c1a0aaf8"
+    },
+    "impeccable": {
+      "source": "pbakaus/impeccable",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/impeccable/skill/SKILL.md",
+      "computedHash": "installed"
     }
   }
 }

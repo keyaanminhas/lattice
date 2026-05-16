@@ -12,21 +12,18 @@ export default function ContributorsPage() {
 
   useEffect(() => {
     async function load() {
-      const [contributorSnap, poolSnap] = await Promise.all([
+      const [cSnap, pSnap] = await Promise.all([
         getDocs(collection(db, 'contributors')),
         getDocs(collection(db, 'programmeContributors')),
       ]);
-
-      const contributorList = [];
-      contributorSnap.forEach((doc) => contributorList.push({ id: doc.id, ...doc.data() }));
-
+      const list = [];
+      cSnap.forEach((d) => list.push({ id: d.id, ...d.data() }));
       const counts = {};
-      poolSnap.forEach((doc) => {
-        const item = doc.data();
-        counts[item.contributorId] = (counts[item.contributorId] || 0) + 1;
+      pSnap.forEach((d) => {
+        const v = d.data();
+        counts[v.contributorId] = (counts[v.contributorId] || 0) + 1;
       });
-
-      setContributors(contributorList);
+      setContributors(list);
       setPoolCounts(counts);
       setLoading(false);
     }
@@ -35,47 +32,40 @@ export default function ContributorsPage() {
 
   if (loading) return <Spinner />;
 
-  const types = [...new Set(contributors.flatMap((item) => item.contributorTypes || [item.type]).filter(Boolean))];
-
-  const filtered = contributors.filter((item) => {
-    const contributorTypes = item.contributorTypes || [item.type];
-    if (filterType && !contributorTypes.includes(filterType)) return false;
-    if (filterAvail && item.availability !== filterAvail) return false;
+  const types = [...new Set(contributors.flatMap((c) => c.contributorTypes || [c.type]).filter(Boolean))];
+  const filtered = contributors.filter((c) => {
+    const ct = c.contributorTypes || [c.type];
+    if (filterType && !ct.includes(filterType)) return false;
+    if (filterAvail && c.availability !== filterAvail) return false;
     return true;
   });
 
+  const ac = {
+    Available: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Limited: { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    Unavailable: { dot: '#ba1a1a', bg: '#ffdad6', text: '#ba1a1a' },
+  };
+
   return (
     <div>
-      <div className="hero-panel page-hero-compact">
-        <div className="hero-kicker">Contributor Registry</div>
-        <div className="hero-title-row">
-          <div>
-            <h2>Maintain a governed view of mentors and resource actors.</h2>
-            <p>
-              Contributor records are screened through type, availability, expertise, and programme-pool placement
-              to keep downstream recommendations reliable and operationally practical.
-            </p>
-          </div>
-          <div className="hero-chip-grid">
-            <div className="hero-chip">
-              <strong>{contributors.length} contributor records</strong>
-              <span>Mentors, investors, partners, and service providers are held in one structured registry.</span>
-            </div>
-          </div>
-        </div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 className="page-title">Contributors</h2>
+        <p className="page-subtitle">{contributors.length} mentors, partners, investors, and service providers.</p>
       </div>
 
-      <div className="page-header">
-        <h2>Contributors</h2>
-        <p>{contributors.length} mentors, partners, investors, and service providers governed through programme pools</p>
+      <div className="stat-grid">
+        <div className="stat-card"><div className="stat-card-label">Total</div><div className="stat-card-value">{contributors.length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">Available</div><div className="stat-card-value accent">{contributors.filter((c) => c.availability === 'Available').length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">Types</div><div className="stat-card-value">{types.length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">In Pools</div><div className="stat-card-value">{Object.values(poolCounts).reduce((a, b) => a + b, 0)}</div></div>
       </div>
 
       <div className="filter-bar">
-        <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+        <select className="filter-input" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
           <option value="">All Types</option>
-          {types.map((item) => <option key={item} value={item}>{item}</option>)}
+          {types.map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
-        <select value={filterAvail} onChange={(e) => setFilterAvail(e.target.value)}>
+        <select className="filter-input" value={filterAvail} onChange={(e) => setFilterAvail(e.target.value)}>
           <option value="">All Availability</option>
           <option value="Available">Available</option>
           <option value="Limited">Limited</option>
@@ -83,37 +73,58 @@ export default function ContributorsPage() {
         </select>
       </div>
 
-      <div className="card-grid">
-        {filtered.map((item) => (
-          <div key={item.id} className="entity-card entity-card-static">
-            <div className="entity-card-top">
-              <div>
-                <h4>{item.name}</h4>
-                <div className="entity-meta">{(item.contributorTypes || [item.type]).join(', ')}</div>
-              </div>
-              <Badge variant={item.availability === 'Available' ? 'green' : item.availability === 'Limited' ? 'yellow' : 'red'}>
-                {item.availability}
-              </Badge>
-            </div>
-            <div className="entity-tags entity-tag-row">
-              {(item.expertise || item.investmentThesis || []).slice(0, 4).map((tag) => (
-                <Badge key={tag} variant="blue">{tag}</Badge>
-              ))}
-            </div>
-            <div className="entity-summary entity-summary-tight">
-              Supports {item.supportedStages?.join(', ') || item.stages?.join(', ') || 'programme-specific stages'}
-            </div>
-            <div className="entity-facts">
-              <div className="entity-fact"><span>Programme Pools</span><strong>{poolCounts[item.id] || 0}</strong></div>
-              <div className="entity-fact"><span>Coverage</span><strong>{item.countryCoverage?.length || 0}</strong></div>
-            </div>
-          </div>
-        ))}
+      <div className="table-container">
+        <div className="table-header">
+          <span className="table-meta">Showing {filtered.length} of {contributors.length}</span>
+        </div>
+        {filtered.length === 0 ? (
+          <div className="empty-state">No contributors match your filters.</div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Availability</th>
+                <th>Expertise</th>
+                <th>Stages</th>
+                <th style={{ textAlign: 'right' }}>Pools</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((c) => {
+                const colors = ac[c.availability] || { dot: '#737686', bg: '#eceef0', text: '#434655' };
+                return (
+                  <tr key={c.id}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div className="avatar avatar-sm avatar-gray">{c.name?.substring(0, 2).toUpperCase()}</div>
+                        <span className="cell-bold">{c.name}</span>
+                      </div>
+                    </td>
+                    <td>{(c.contributorTypes || [c.type]).join(', ')}</td>
+                    <td>
+                      <span className="status-pill" style={{ background: colors.bg, color: colors.text }}>
+                        <span className="status-dot" style={{ background: colors.dot }}></span>
+                        {c.availability}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="tag-list">
+                        {(c.expertise || c.investmentThesis || []).slice(0, 3).map((t) => (
+                          <Badge key={t} variant="blue">{t}</Badge>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="cell-muted">{c.supportedStages?.join(', ') || '—'}</td>
+                    <td style={{ textAlign: 'right' }} className="cell-bold">{poolCounts[c.id] || 0}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
-
-      {filtered.length === 0 && (
-        <div className="empty-state"><p>No contributors match your filters.</p></div>
-      )}
     </div>
   );
 }

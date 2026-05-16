@@ -5,56 +5,59 @@ export function Badge({ children, variant = 'blue' }) {
 export function StarRating({ value = 0, max = 5, caption = '' }) {
   const rounded = Math.max(0, Math.min(max, Math.round(value)));
   const stars = Array.from({ length: max }, (_, index) => (
-    <span key={`${caption}-${index}`} className={index < rounded ? 'star-filled' : 'star-empty'}>
-      ★
-    </span>
+    <span key={`${caption}-${index}`} style={{ color: index < rounded ? '#f59e0b' : '#d1d5db' }}>★</span>
   ));
-
   return (
-    <span className="star-rating" aria-label={`${value} out of ${max} stars`}>
-      <span className="star-row">{stars}</span>
-      {caption ? <span className="star-caption">{caption}</span> : null}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600 }}>
+      <span style={{ display: 'inline-flex', gap: 1 }}>{stars}</span>
+      {caption ? <span style={{ opacity: 0.8 }}>{caption}</span> : null}
     </span>
   );
 }
 
 export function ScoreBadge({ score, label }) {
-  let cls = 'score-low';
+  let cls = 'badge-gray';
   let tier = label || 'Developing';
-  if (score >= 80) cls = 'score-high';
-  if (score >= 80) tier = label || 'Strong';
-  else if (score >= 65) {
-    cls = 'score-medium';
-    tier = label || 'Moderate';
-  }
-
-  const starValue = Math.max(1, Math.min(5, Math.round(score / 20)));
+  if (score >= 80) { cls = 'badge-green'; tier = label || 'Strong'; }
+  else if (score >= 65) { cls = 'badge-yellow'; tier = label || 'Moderate'; }
 
   return (
-    <span className={`score-badge ${cls}`}>
-      <span className="score-badge-value">{Math.round(score)}%</span>
-      <StarRating value={starValue} caption={tier} />
+    <span className={`score-badge badge ${cls}`}>
+      <span>{Math.round(score)}%</span>
+      <span className="score-tier">{tier}</span>
     </span>
   );
 }
 
 export function StatusPill({ status }) {
-  const map = {
-    Open: 'blue',
-    Accepted: 'green',
-    Recommended: 'blue',
-    Approved: 'green',
-    Active: 'green',
-    Completed: 'gray',
-    Rejected: 'red',
-    'Needs Review': 'yellow',
-    'Pending Approval': 'yellow',
-    'Pending Admin Review': 'yellow',
-    Verified: 'green',
-    Pending: 'yellow',
-    Draft: 'gray',
+  const colorMap = {
+    Open: { dot: '#2196f3', bg: '#e3f2fd', text: '#0d47a1' },
+    Accepted: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Recommended: { dot: '#2196f3', bg: '#e3f2fd', text: '#0d47a1' },
+    Approved: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Active: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Completed: { dot: '#737686', bg: '#eceef0', text: '#191c1e' },
+    Rejected: { dot: '#ba1a1a', bg: '#ffdad6', text: '#ba1a1a' },
+    'Needs Review': { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    'Pending Approval': { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    'Pending Admin Review': { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    Verified: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Pending: { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    Draft: { dot: '#737686', bg: '#eceef0', text: '#434655' },
+    Available: { dot: '#4caf50', bg: '#e8f5e9', text: '#1b5e20' },
+    Limited: { dot: '#ff9800', bg: '#fff3e0', text: '#e65100' },
+    Unavailable: { dot: '#ba1a1a', bg: '#ffdad6', text: '#ba1a1a' },
+    Closed: { dot: '#737686', bg: '#eceef0', text: '#434655' },
+    Suspended: { dot: '#ba1a1a', bg: '#ffdad6', text: '#ba1a1a' },
   };
-  return <Badge variant={map[status] || 'gray'}>{status}</Badge>;
+  const c = colorMap[status] || { dot: '#737686', bg: '#eceef0', text: '#434655' };
+
+  return (
+    <span className="status-pill" style={{ background: c.bg, color: c.text }}>
+      <span className="status-dot" style={{ background: c.dot }}></span>
+      {status}
+    </span>
+  );
 }
 
 export function Spinner() {

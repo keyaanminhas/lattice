@@ -13,134 +13,77 @@ export default function ProgrammesPage() {
 
   useEffect(() => {
     async function load() {
-      const [programmeSnap, appSnap, poolSnap, relSnap] = await Promise.all([
-        getDocs(collection(db, 'programmes')),
-        getDocs(collection(db, 'applications')),
-        getDocs(collection(db, 'programmeContributors')),
-        getDocs(collection(db, 'relationships')),
+      const [pSnap, aSnap, poolSnap, relSnap] = await Promise.all([
+        getDocs(collection(db, 'programmes')), getDocs(collection(db, 'applications')),
+        getDocs(collection(db, 'programmeContributors')), getDocs(collection(db, 'relationships')),
       ]);
-
-      const programmeList = [];
-      programmeSnap.forEach((doc) => programmeList.push({ id: doc.id, ...doc.data() }));
-
-      const aggregates = {};
-      appSnap.forEach((doc) => {
-        const item = doc.data();
-        aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
-        aggregates[item.programmeId].applications += 1;
-        if (item.status === 'Accepted') aggregates[item.programmeId].accepted += 1;
-      });
-      poolSnap.forEach((doc) => {
-        const item = doc.data();
-        aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
-        if (item.status === 'Approved') aggregates[item.programmeId].pools += 1;
-      });
-      relSnap.forEach((doc) => {
-        const item = doc.data();
-        aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
-        if (item.relationshipType === 'Startup-to-Mentor' && item.status !== 'Rejected') {
-          aggregates[item.programmeId].mentorRelationships += 1;
-        }
-      });
-
-      setProgrammes(programmeList);
-      setStats(aggregates);
-      setLoading(false);
+      const list = []; pSnap.forEach((d) => list.push({ id: d.id, ...d.data() }));
+      const agg = {};
+      aSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; agg[v.programmeId].apps++; if (v.status === 'Accepted') agg[v.programmeId].accepted++; });
+      poolSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; if (v.status === 'Approved') agg[v.programmeId].pools++; });
+      relSnap.forEach((d) => { const v = d.data(); agg[v.programmeId] ||= { apps: 0, accepted: 0, pools: 0, mentors: 0 }; if (v.relationshipType === 'Startup-to-Mentor' && v.status !== 'Rejected') agg[v.programmeId].mentors++; });
+      setProgrammes(list); setStats(agg); setLoading(false);
     }
-
     load();
   }, []);
 
   if (loading) return <Spinner />;
-
-  const filtered = programmes.filter((programme) => !filterStatus || programme.status === filterStatus);
+  const filtered = programmes.filter((p) => !filterStatus || p.status === filterStatus);
 
   return (
     <div>
-      <div className="hero-panel">
-        <div className="hero-kicker">Programme Directory</div>
-        <div className="hero-title-row">
-          <div>
-            <h2>Each startup journey is governed through a defined programme context.</h2>
-            <p>
-              Browse the operational environments where actor pools are approved, admissions are governed,
-              and mentor relationships are activated only after programme fit is confirmed.
-            </p>
-          </div>
-          <div className="hero-chip-grid">
-            <div className="hero-chip">
-              <strong>{programmes.length} programme contexts</strong>
-              <span>Each one defines its own sector, stage, and outcome envelope.</span>
-            </div>
-            <div className="hero-chip">
-              <strong>Programme pools are explicit</strong>
-              <span>Partners, investors, and service providers remain inside approved resource pools.</span>
-            </div>
-          </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2 className="page-title">Programmes</h2>
+          <p className="page-subtitle">{programmes.length} programme contexts for admissions, pools, and mentor relationships.</p>
         </div>
+        <button className="btn btn-primary" onClick={() => navigate('/programmes/create')}>
+          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>add</span> Create Programme
+        </button>
       </div>
 
-      <div className="page-header">
-        <h2>Programmes</h2>
-        <p>{programmes.length} active programme contexts for applications, pools, and mentor relationships</p>
+      <div className="stat-grid">
+        <div className="stat-card"><div className="stat-card-label">Total</div><div className="stat-card-value">{programmes.length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">Open</div><div className="stat-card-value accent">{programmes.filter((p) => p.status === 'Open').length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">Active</div><div className="stat-card-value">{programmes.filter((p) => p.status === 'Active').length}</div></div>
+        <div className="stat-card"><div className="stat-card-label">Closed</div><div className="stat-card-value">{programmes.filter((p) => p.status === 'Closed').length}</div></div>
       </div>
 
       <div className="filter-bar">
-        <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-          <option value="">All Statuses</option>
-          <option value="Open">Open</option>
-          <option value="Active">Active</option>
-          <option value="Draft">Draft</option>
-          <option value="Closed">Closed</option>
+        <select className="filter-input" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+          <option value="">All Statuses</option><option value="Open">Open</option><option value="Active">Active</option><option value="Draft">Draft</option><option value="Closed">Closed</option>
         </select>
       </div>
 
-      <div className="card-grid">
-        {filtered.map((programme) => {
-          const programmeStats = stats[programme.id] || { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
-          return (
-            <div key={programme.id} className="entity-card" onClick={() => navigate(`/programmes/${programme.id}`)}>
-              <div className="entity-card-top">
-                <div>
-                  <h4>{programme.name}</h4>
-                  <div className="entity-meta">{programme.type} / {programme.country || programme.region}</div>
-                </div>
-                <StatusPill status={programme.status} />
-              </div>
-              <p className="entity-summary">
-                Targets {programme.targetStages?.join(', ')} startups in {programme.targetSectors?.join(', ')}.
-              </p>
-              <div className="entity-tags entity-tag-row">
-                {programme.expectedOutcomes?.slice(0, 3).map((item) => (
-                  <Badge key={item} variant="blue">{item}</Badge>
-                ))}
-              </div>
-              <div className="resource-grid">
-                <div className="resource-card">
-                  <h4>{programmeStats.applications}</h4>
-                  <p>applications received</p>
-                </div>
-                <div className="resource-card">
-                  <h4>{programmeStats.accepted}</h4>
-                  <p>startups admitted</p>
-                </div>
-                <div className="resource-card">
-                  <h4>{programmeStats.pools}</h4>
-                  <p>pool contributors</p>
-                </div>
-                <div className="resource-card">
-                  <h4>{programmeStats.mentorRelationships}</h4>
-                  <p>mentor links activated</p>
-                </div>
-              </div>
-            </div>
-          );
-        })}
+      <div className="table-container">
+        <div className="table-header"><span className="table-meta">Showing {filtered.length} of {programmes.length}</span></div>
+        {filtered.length === 0 ? <div className="empty-state">No programmes match your filter.</div> : (
+          <table className="data-table">
+            <thead><tr><th>Programme</th><th>Type</th><th>Status</th><th>Outcomes</th><th style={{ textAlign: 'right' }}>Apps</th><th style={{ textAlign: 'right' }}>Admitted</th><th style={{ textAlign: 'right' }}>Pool</th><th style={{ textAlign: 'right' }}>Mentors</th><th></th></tr></thead>
+            <tbody>{filtered.map((p) => {
+              const s = stats[p.id] || { apps: 0, accepted: 0, pools: 0, mentors: 0 };
+              return (
+                <tr key={p.id} onClick={() => navigate(`/programmes/${p.id}`)} style={{ cursor: 'pointer' }}>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div className="avatar avatar-sm avatar-blue"><span className="material-symbols-outlined" style={{ fontSize: 14 }}>school</span></div>
+                      <div><div className="cell-bold">{p.name}</div><div className="cell-muted">{p.country || p.region}</div></div>
+                    </div>
+                  </td>
+                  <td>{p.type}</td>
+                  <td><StatusPill status={p.status} /></td>
+                  <td><div className="tag-list">{p.expectedOutcomes?.slice(0, 2).map((o) => <Badge key={o} variant="blue">{o}</Badge>)}</div></td>
+                  <td style={{ textAlign: 'right' }} className="cell-bold">{s.apps}</td>
+                  <td style={{ textAlign: 'right' }} className="cell-bold">{s.accepted}</td>
+                  <td style={{ textAlign: 'right' }} className="cell-bold">{s.pools}</td>
+                  <td style={{ textAlign: 'right' }} className="cell-bold">{s.mentors}</td>
+                  <td><span className="material-symbols-outlined" style={{ color: '#c3c6d7' }}>chevron_right</span></td>
+                </tr>
+              );
+            })}</tbody>
+          </table>
+        )}
       </div>
-
-      {filtered.length === 0 && (
-        <div className="empty-state"><p>No programmes match your current filter.</p></div>
-      )}
     </div>
   );
 }
