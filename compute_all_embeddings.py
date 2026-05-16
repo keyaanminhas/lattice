@@ -6,7 +6,8 @@ from firebase_admin import firestore
 from dotenv import load_dotenv
 from google import genai
 
-os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"
+if os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}:
+    os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"
 load_dotenv("functions/.env")
 
 api_key = os.environ.get("GEMINI_API_KEY")

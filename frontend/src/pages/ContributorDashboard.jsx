@@ -55,9 +55,22 @@ export default function ContributorDashboard({ user }) {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Welcome, {user.name}</h2>
-        <p>Your approved programme pools and startup mentorship assignments.</p>
+      <div className="hero-panel page-hero-compact">
+        <div className="hero-kicker">Contributor Workspace</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>{user.name} / assignment and mentorship overview</h2>
+            <p>
+              Track approved programme participation and governed startup mentorship links from a formal assignment view.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{mentorLinks.filter((item) => item.status === 'Active').length} active startup links</strong>
+              <span>Only approved relationships appear here as live mentorship work.</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="stat-grid">
@@ -77,7 +90,7 @@ export default function ContributorDashboard({ user }) {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>Programme Assignments</h3>
+          <h3>Programme Assignment Register</h3>
         </div>
         {poolAssignments.length === 0 ? (
           <div className="empty-state"><p>No programme assignments yet.</p></div>
@@ -105,7 +118,7 @@ export default function ContributorDashboard({ user }) {
 
       <div className="card">
         <div className="card-header">
-          <h3>Startup Mentorship Relationships</h3>
+          <h3>Startup Mentorship Register</h3>
         </div>
         {mentorLinks.length === 0 ? (
           <div className="empty-state"><p>No startup mentorship assignments yet.</p></div>
@@ -126,7 +139,7 @@ export default function ContributorDashboard({ user }) {
                   <td>{programmeNames[item.programmeId] || item.programmeId}</td>
                   <td>
                     {recommendationScores[`${item.sourceEntityId}_${item.programmeId}`]
-                      ? <ScoreBadge score={recommendationScores[`${item.sourceEntityId}_${item.programmeId}`]} />
+                      ? <ScoreBadge score={recommendationScores[`${item.sourceEntityId}_${item.programmeId}`]} label="Match quality" />
                       : 'Approved'}
                   </td>
                   <td><StatusPill status={item.status} /></td>

@@ -61,7 +61,7 @@ export default function ProgrammesPage() {
         <div className="hero-kicker">Programme Directory</div>
         <div className="hero-title-row">
           <div>
-            <h2>Every startup path now starts with a programme.</h2>
+            <h2>Each startup journey is governed through a defined programme context.</h2>
             <p>
               Browse the operational environments where actor pools are approved, admissions are governed,
               and mentor relationships are activated only after programme fit is confirmed.
@@ -74,7 +74,7 @@ export default function ProgrammesPage() {
             </div>
             <div className="hero-chip">
               <strong>Programme pools are explicit</strong>
-              <span>Partners, investors, and service providers live inside approved resource pools.</span>
+              <span>Partners, investors, and service providers remain inside approved resource pools.</span>
             </div>
           </div>
         </div>
@@ -100,17 +100,17 @@ export default function ProgrammesPage() {
           const programmeStats = stats[programme.id] || { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
           return (
             <div key={programme.id} className="entity-card" onClick={() => navigate(`/programmes/${programme.id}`)}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+              <div className="entity-card-top">
                 <div>
                   <h4>{programme.name}</h4>
-                  <div className="entity-meta">{programme.type} · {programme.country || programme.region}</div>
+                  <div className="entity-meta">{programme.type} / {programme.country || programme.region}</div>
                 </div>
                 <StatusPill status={programme.status} />
               </div>
-              <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 12 }}>
+              <p className="entity-summary">
                 Targets {programme.targetStages?.join(', ')} startups in {programme.targetSectors?.join(', ')}.
               </p>
-              <div className="entity-tags" style={{ marginBottom: 12 }}>
+              <div className="entity-tags entity-tag-row">
                 {programme.expectedOutcomes?.slice(0, 3).map((item) => (
                   <Badge key={item} variant="blue">{item}</Badge>
                 ))}

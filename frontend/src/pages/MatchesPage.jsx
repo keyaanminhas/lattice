@@ -65,31 +65,31 @@ export default function MatchesPage() {
   return (
     <div>
       <div className="hero-panel">
-        <div className="hero-kicker">Approval Queue</div>
+        <div className="hero-kicker">Recommendation Review Board</div>
         <div className="hero-title-row">
           <div>
-            <h2>AI recommends. Programme admins decide.</h2>
+            <h2>Recommendation decisions remain a controlled administrative action.</h2>
             <p>
-              This queue is now split across startup admissions, contributor-to-programme pool assignments,
-              and startup-to-mentor activation. Nothing becomes operational without review.
+              This board consolidates startup admissions, contributor pool proposals, and mentor activation
+              so that no relationship enters live operation without documented review.
             </p>
           </div>
           <div className="hero-chip-grid">
             <div className="hero-chip">
               <strong>{recommendations.filter((item) => item.status === 'Pending Approval').length} pending approvals</strong>
-              <span>These are the next decisions that will change programme state.</span>
+              <span>These are the next decisions capable of changing programme state.</span>
             </div>
             <div className="hero-chip">
-              <strong>{recommendations.filter((item) => item.status === 'Approved').length} already approved</strong>
-              <span>Approved recommendations create programme assignments or active relationships.</span>
+              <strong>{recommendations.filter((item) => item.status === 'Approved').length} approved records</strong>
+              <span>Approved recommendations become applications, pool assignments, or active relationships.</span>
             </div>
           </div>
         </div>
       </div>
 
       <div className="page-header">
-        <h2>AI Recommendations</h2>
-        <p>{recommendations.length} pending or reviewed suggestions across admissions, programme pools, and mentor matching</p>
+        <h2>Recommendation Queue</h2>
+        <p>{recommendations.length} recommendation records across admissions, programme pools, and mentor assignment workflows</p>
       </div>
 
       <div className="filter-bar">
@@ -116,18 +116,20 @@ export default function MatchesPage() {
                   <h4>{item.recommendationType}</h4>
                   <div className="stack-item-meta">{programmes[item.programmeId] || item.programmeId}</div>
                 </div>
-                <ScoreBadge score={item.matchScore} />
+                <ScoreBadge score={item.matchScore} label="AI confidence" />
               </div>
               <div className="recommendation-meta">
                 <StatusPill status={item.status} />
               </div>
-              <p>
-                Source: {startups[item.sourceEntityId] || contributors[item.sourceEntityId] || programmes[item.sourceEntityId] || item.sourceEntityId}
-              </p>
-              <p>
-                Target: {startups[item.targetEntityId] || contributors[item.targetEntityId] || programmes[item.targetEntityId] || item.targetEntityId}
-              </p>
-              <p style={{ marginTop: 10 }}>{item.explanation}</p>
+              <div className="recommendation-meta-line">
+                <span className="meta-term">Source</span>
+                <span>{startups[item.sourceEntityId] || contributors[item.sourceEntityId] || programmes[item.sourceEntityId] || item.sourceEntityId}</span>
+              </div>
+              <div className="recommendation-meta-line">
+                <span className="meta-term">Target</span>
+                <span>{startups[item.targetEntityId] || contributors[item.targetEntityId] || programmes[item.targetEntityId] || item.targetEntityId}</span>
+              </div>
+              <p className="recommendation-copy">{item.explanation}</p>
               {item.riskFlags?.length ? (
                 <div className="recommendation-meta">
                   {item.riskFlags.map((flag) => <Badge key={flag} variant="red">{flag}</Badge>)}
@@ -144,7 +146,7 @@ export default function MatchesPage() {
                 </div>
               ) : (
                 <div className="recommendation-actions">
-                  <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Reviewed recommendation</span>
+                  <span className="review-note">Recommendation already reviewed</span>
                 </div>
               )}
             </div>

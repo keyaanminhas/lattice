@@ -3,7 +3,7 @@ import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firesto
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
-import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { Badge, ScoreBadge, StarRating, StatusPill, Spinner } from '../components/Shared';
 
 export default function CompanyDetailPage() {
   const { id } = useParams();
@@ -105,35 +105,61 @@ export default function CompanyDetailPage() {
   if (!startup) return <div className="empty-state"><p>Startup not found.</p></div>;
 
   const mentorRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Mentor');
+  const mentorRelationships = relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor');
   const programmeRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Programme');
 
   return (
     <div>
-      <div className="detail-header">
-        <div>
-          <button className="btn btn-sm btn-outline" onClick={() => navigate('/companies')} style={{ marginBottom: 12 }}>
-            ← Back to Startups
-          </button>
-          <h2>{startup.name}</h2>
-          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-            <Badge variant="blue">{startup.industry || startup.sector}</Badge>
-            <Badge variant="gray">{startup.stage}</Badge>
-            <StatusPill status={startup.verificationStatus} />
+      <div className="hero-panel">
+        <div className="hero-kicker">Startup Record</div>
+        <div className="hero-title-row">
+          <div>
+            <button className="btn btn-sm btn-outline" onClick={() => navigate('/companies')} style={{ marginBottom: 12 }}>
+              Back to Startups
+            </button>
+            <h2>{startup.name}</h2>
+            <p>
+              Review the operating profile, AI-generated assessment, programme pathway, and mentor activation status for this startup.
+            </p>
+            <div className="entity-tags entity-tag-row">
+              <Badge variant="blue">{startup.industry || startup.sector}</Badge>
+              <Badge variant="gray">{startup.stage}</Badge>
+              <StatusPill status={startup.verificationStatus} />
+            </div>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{applications.length} programme applications</strong>
+              <span>Applications show current progress toward governed programme admission.</span>
+            </div>
+            <div className="hero-chip">
+              <strong>{mentorRecommendations.length} mentor recommendations</strong>
+              <span>Mentor pathways activate only after programme acceptance.</span>
+            </div>
+            <div className="hero-chip">
+              <strong>{mentorRelationships.length} active mentor links</strong>
+              <span>Relationships listed here are already formalised inside programme context.</span>
+            </div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div className="hero-actions">
           <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
-            {profileLoading ? 'Analyzing...' : 'Summarize Profile'}
+            {profileLoading ? 'Analyzing...' : 'Generate Profile Summary'}
           </button>
           <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
-            {generatingProgrammes ? 'Generating...' : 'Recommend Programmes'}
+            {generatingProgrammes ? 'Generating...' : 'Generate Programme Recommendations'}
           </button>
         </div>
       </div>
 
       <div className="detail-sections">
-        <div className="card">
-          <h3 style={{ marginBottom: 16 }}>Startup Profile</h3>
+        <div className="card glass-panel">
+          <h3 style={{ marginBottom: 16 }}>Operating Profile</h3>
+          <div className="entity-facts detail-metrics">
+            <div className="entity-fact"><span>Country</span><strong>{startup.country || 'Not specified'}</strong></div>
+            <div className="entity-fact"><span>Team Size</span><strong>{startup.teamSize || 0}</strong></div>
+            <div className="entity-fact"><span>Support Needs</span><strong>{startup.supportNeeds?.length || 0}</strong></div>
+          </div>
           <div className="detail-field">
             <label>Problem Statement</label>
             <p>{startup.problemStatement}</p>
@@ -154,26 +180,48 @@ export default function CompanyDetailPage() {
             <label>Current Challenges</label>
             <div className="entity-tags">{startup.currentChallenges?.map((item) => <Badge key={item} variant="yellow">{item}</Badge>)}</div>
           </div>
+          <div className="detail-field">
+            <label>Skills</label>
+            <div className="entity-tags">{startup.skills?.map((item) => <Badge key={item} variant="purple">{item}</Badge>)}</div>
+          </div>
         </div>
 
-        <div className="card">
+        <div className="card glass-panel">
           <div className="card-header">
-            <h3>AI Startup Summary</h3>
+            <h3>AI Readiness Summary</h3>
           </div>
           {profileLoading && <Spinner />}
           {aiProfile ? (
             <div className="ai-profile">
+              <div className="ai-score-grid">
+                <div className="ai-score-card">
+                  <span>Profile Completeness</span>
+                  <strong>{Math.round(aiProfile.profileCompletenessScore)}%</strong>
+                  <StarRating value={aiProfile.profileCompletenessScore / 20} caption="Documentation quality" />
+                </div>
+                <div className="ai-score-card">
+                  <span>Readiness Rating</span>
+                  <strong>{aiProfile.readinessScore} / 10</strong>
+                  <StarRating value={aiProfile.readinessScore / 2} caption="Operational readiness" />
+                </div>
+              </div>
               <div className="detail-field">
                 <label>Summary</label>
                 <p>{aiProfile.summary}</p>
               </div>
               <div className="detail-field">
                 <label>Profile Completeness</label>
-                <p>{aiProfile.profileCompletenessScore} / 100</p>
+                <p className="metric-footnote">
+                  Higher completeness indicates that the startup record includes enough commercial, product,
+                  and traction detail for programme matching to be more reliable.
+                </p>
               </div>
               <div className="detail-field">
                 <label>Readiness Score</label>
-                <p>{aiProfile.readinessScore} / 10</p>
+                <p className="metric-footnote">
+                  Readiness reflects the AI view of how prepared this company is for formal programme admission and
+                  mentor activation.
+                </p>
               </div>
               <div className="detail-field">
                 <label>Auto Tags</label>
@@ -196,7 +244,7 @@ export default function CompanyDetailPage() {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>Programme Applications</h3>
+          <h3>Programme Application Register</h3>
         </div>
         {applications.length === 0 ? (
           <div className="empty-state"><p>No programme applications yet.</p></div>
@@ -223,10 +271,10 @@ export default function CompanyDetailPage() {
                         onClick={() => generateMentorRecommendations(item.programmeId)}
                         disabled={generatingMentorFor === item.programmeId}
                       >
-                        {generatingMentorFor === item.programmeId ? 'Generating...' : 'Recommend Mentor'}
+                        {generatingMentorFor === item.programmeId ? 'Generating...' : 'Generate Mentor Recommendations'}
                       </button>
                     ) : (
-                      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Admission required first</span>
+                      <span className="review-note">Admission required first</span>
                     )}
                   </td>
                 </tr>
@@ -239,49 +287,55 @@ export default function CompanyDetailPage() {
       <div className="two-col">
         <div className="card">
           <div className="card-header">
-            <h3>Programme Recommendations</h3>
+            <h3>Programme Recommendation Briefing</h3>
           </div>
           {programmeRecommendations.length === 0 ? (
             <div className="empty-state"><p>No programme recommendations yet.</p></div>
           ) : (
-            programmeRecommendations.map((item) => (
-              <div key={item.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--color-border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
-                  <div style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</div>
-                  <ScoreBadge score={item.matchScore} />
+            <div className="stack-list">
+              {programmeRecommendations.map((item) => (
+                <div key={item.id} className="stack-item recommendation-item">
+                  <div className="stack-item-header">
+                    <div className="stack-item-title">{programmeNames[item.programmeId] || item.programmeId}</div>
+                    <ScoreBadge score={item.matchScore} label="Programme fit" />
+                  </div>
+                  <div className="stack-item-copy">{item.explanation}</div>
+                  <div className="recommendation-meta">
+                    <StatusPill status={item.status} />
+                  </div>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.explanation}</div>
-                <div style={{ marginTop: 6 }}><StatusPill status={item.status} /></div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
         </div>
 
         <div className="card">
           <div className="card-header">
-            <h3>Mentor Recommendations & Active Mentor Links</h3>
+            <h3>Mentor Recommendations and Active Links</h3>
           </div>
-          {mentorRecommendations.length === 0 && relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor').length === 0 ? (
+          {mentorRecommendations.length === 0 && mentorRelationships.length === 0 ? (
             <div className="empty-state"><p>No mentor recommendations or links yet.</p></div>
           ) : (
-            <div style={{ display: 'grid', gap: 12 }}>
+            <div className="stack-list">
               {mentorRecommendations.map((item) => (
-                <div key={item.id} style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600 }}>{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
-                    <ScoreBadge score={item.matchScore} />
+                <div key={item.id} className="stack-item recommendation-item">
+                  <div className="stack-item-header">
+                    <div className="stack-item-title">{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
+                    <ScoreBadge score={item.matchScore} label="Mentor fit" />
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.explanation}</div>
-                  <div style={{ marginTop: 6 }}><StatusPill status={item.status} /></div>
-                </div>
-              ))}
-              {relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor').map((item) => (
-                <div key={item.id} style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: 12 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600 }}>{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
+                  <div className="stack-item-copy">{item.explanation}</div>
+                  <div className="recommendation-meta">
                     <StatusPill status={item.status} />
                   </div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.expectedOutcome}</div>
+                </div>
+              ))}
+              {mentorRelationships.map((item) => (
+                <div key={item.id} className="stack-item recommendation-item">
+                  <div className="stack-item-header">
+                    <div className="stack-item-title">{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
+                    <StatusPill status={item.status} />
+                  </div>
+                  <div className="stack-item-copy">{item.expectedOutcome}</div>
                 </div>
               ))}
             </div>

@@ -49,6 +49,29 @@ export default function CompaniesPage() {
 
   return (
     <div>
+      <div className="hero-panel page-hero-compact">
+        <div className="hero-kicker">Startup Portfolio</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>Review startup records in a programme-readiness format.</h2>
+            <p>
+              This directory supports structured screening by sector, stage, verification status, and support demand
+              before any programme-level recommendation is issued.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{startups.length} profiles in scope</strong>
+              <span>Each record is available for programme-fit review and AI-assisted summarisation.</span>
+            </div>
+            <div className="hero-chip">
+              <strong>{filtered.length} visible after filters</strong>
+              <span>Search and categorical filters narrow the current review set.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="page-header">
         <h2>Startups</h2>
         <p>{startups.length} startup profiles available for programme matching</p>
@@ -57,7 +80,7 @@ export default function CompaniesPage() {
       <div className="filter-bar">
         <input
           type="text"
-          placeholder="Search startups..."
+          placeholder="Search startups"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -77,23 +100,27 @@ export default function CompaniesPage() {
             key={startup.id}
             className="entity-card"
             onClick={() => navigate(`/companies/${startup.id}`)}
-            style={{ cursor: 'pointer' }}
           >
-            <h4>{startup.name}</h4>
-            <div className="entity-meta">
-              {(startup.industry || startup.sector)} · {startup.stage} · {startup.country} · {startup.teamSize} people
-            </div>
-            <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
-              {startup.problemStatement?.substring(0, 110)}...
-            </p>
-            <div className="entity-tags" style={{ marginBottom: 10 }}>
+            <div className="entity-card-top">
+              <div>
+                <h4>{startup.name}</h4>
+                <div className="entity-meta">
+                  {(startup.industry || startup.sector)} / {startup.stage} / {startup.country} / {startup.teamSize} team members
+                </div>
+              </div>
               <StatusPill status={startup.verificationStatus} />
-              {startup.supportNeeds?.slice(0, 2).map((item) => (
+            </div>
+            <p className="entity-summary">
+              {startup.problemStatement?.substring(0, 120)}...
+            </p>
+            <div className="entity-tags entity-tag-row">
+              {startup.supportNeeds?.slice(0, 3).map((item) => (
                 <Badge key={item} variant="blue">{item}</Badge>
               ))}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-              {applicationCounts[startup.id] || 0} programme applications
+            <div className="entity-facts">
+              <div className="entity-fact"><span>Applications</span><strong>{applicationCounts[startup.id] || 0}</strong></div>
+              <div className="entity-fact"><span>Support Needs</span><strong>{startup.supportNeeds?.length || 0}</strong></div>
             </div>
           </div>
         ))}

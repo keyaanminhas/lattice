@@ -3,7 +3,7 @@ import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
-import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
@@ -56,32 +56,32 @@ export default function DashboardPage() {
   return (
     <div>
       <div className="hero-panel">
-        <div className="hero-kicker">Programme-First Control Layer</div>
+        <div className="hero-kicker">Ecosystem Operations Brief</div>
         <div className="hero-title-row">
           <div>
-            <h2>Govern the ecosystem through programmes, not ad hoc matching.</h2>
+            <h2>Govern ecosystem relationships through clear programme structures.</h2>
             <p>
-              Lattice now routes startup admissions, contributor pools, mentor assignment, and outcome learning
-              through programme context so every linkage is explainable, approved, and reusable.
+              Lattice centralises admissions, actor-pool governance, mentor activation, and outcome learning
+              into one operating layer so each relationship can be reviewed, justified, and reused.
             </p>
             <div className="hero-actions">
-              <button className="btn btn-primary" onClick={() => navigate('/programmes')}>Open Programmes</button>
-              <button className="btn btn-outline" onClick={() => navigate('/matches')}>Review Queue</button>
-              <button className="btn btn-outline" onClick={() => navigate('/insights')}>AI Insights</button>
+              <button className="btn btn-primary" onClick={() => navigate('/programmes')}>Review Programmes</button>
+              <button className="btn btn-outline" onClick={() => navigate('/matches')}>Open Recommendation Queue</button>
+              <button className="btn btn-outline" onClick={() => navigate('/insights')}>Open Intelligence View</button>
             </div>
           </div>
           <div className="hero-chip-grid">
             <div className="hero-chip">
-              <strong>Programme pools before startup access</strong>
-              <span>Mentors, investors, partners, and providers are governed at the programme layer first.</span>
+              <strong>Programme pools precede startup access</strong>
+              <span>Mentors, investors, partners, and providers are approved into formal pools before activation.</span>
             </div>
             <div className="hero-chip">
-              <strong>Human approval stays in the loop</strong>
-              <span>Recommendations do not become operational relationships until a programme admin approves them.</span>
+              <strong>Approval remains a formal control</strong>
+              <span>Recommendations do not become operational assignments until an administrator confirms them.</span>
             </div>
             <div className="hero-chip">
-              <strong>Learning compounds with outcomes</strong>
-              <span>Structured feedback feeds back into future programme and mentor recommendations.</span>
+              <strong>Outcome evidence informs future matching</strong>
+              <span>Structured post-engagement feedback strengthens future recommendations and oversight.</span>
             </div>
           </div>
         </div>
@@ -114,7 +114,7 @@ export default function DashboardPage() {
           <div className="stat-card">
             <div className="stat-label">Pending Recommendations</div>
             <div className="stat-value">{stats.pendingRecommendations}</div>
-            <div className="stat-sub">{stats.activeRelationships} active relationships</div>
+            <div className="stat-sub">{stats.activeRelationships} active governed relationships</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">Completed Relationships</div>
@@ -131,49 +131,56 @@ export default function DashboardPage() {
         <div className="flow-step">
           <div className="step-index">1</div>
           <strong>Create programme context</strong>
-          <span>Organisation admins define sector, stage, and expected outcome constraints.</span>
+          <span>Administrators define sector, stage, geography, and expected outcome requirements.</span>
         </div>
         <div className="flow-step">
           <div className="step-index">2</div>
           <strong>Assemble actor pools</strong>
-          <span>Mentors, partners, investors, and service providers attach to programmes first.</span>
+          <span>Mentors, partners, investors, and service providers are admitted into governed programme pools.</span>
         </div>
         <div className="flow-step">
           <div className="step-index">3</div>
           <strong>Admit startups</strong>
-          <span>AI recommends startup-to-programme fit and admins decide admissions.</span>
+          <span>AI recommends programme fit, while administrators determine final admission decisions.</span>
         </div>
         <div className="flow-step">
           <div className="step-index">4</div>
           <strong>Activate governed links</strong>
-          <span>Only accepted startups receive mentor assignment and programme resource access.</span>
+          <span>Only admitted startups can progress to mentor assignment and managed resource access.</span>
         </div>
       </div>
 
       <div className="section-grid">
         <div className="card glass-panel">
           <div className="card-header">
-            <h3>Recent AI Recommendations</h3>
-            <button className="btn btn-sm btn-outline" onClick={() => navigate('/matches')}>View All</button>
+            <h3>Recent Recommendation Activity</h3>
+            <button className="btn btn-sm btn-outline" onClick={() => navigate('/matches')}>View Full Queue</button>
           </div>
           {recentRecommendations.length === 0 ? (
             <div className="empty-state"><p>No recommendations generated yet.</p></div>
           ) : (
-            <div className="recommendation-grid">
+            <div className="stack-list">
               {recentRecommendations.map((item) => (
-                <div key={item.id} className="recommendation-card">
+                <div key={item.id} className="stack-item recommendation-item">
                   <div className="stack-item-header">
                     <div>
-                      <h4>{item.recommendationType}</h4>
+                      <div className="stack-item-title">{item.recommendationType}</div>
                       <div className="stack-item-meta">{programmes[item.programmeId] || item.programmeId}</div>
                     </div>
-                    <ScoreBadge score={item.matchScore} />
+                    <ScoreBadge score={item.matchScore} label="AI confidence" />
                   </div>
-                  <p>
-                    {startups[item.sourceEntityId] || contributors[item.sourceEntityId] || item.sourceEntityId}
-                  </p>
+                  <div className="recommendation-meta-line">
+                    <span className="meta-term">Source</span>
+                    <span>{startups[item.sourceEntityId] || contributors[item.sourceEntityId] || item.sourceEntityId}</span>
+                  </div>
+                  <div className="recommendation-meta-line">
+                    <span className="meta-term">Target</span>
+                    <span>{programmes[item.targetEntityId] || contributors[item.targetEntityId] || item.targetEntityId}</span>
+                  </div>
+                  <p className="stack-item-copy">{item.explanation}</p>
                   <div className="recommendation-meta">
                     <StatusPill status={item.status} />
+                    {item.riskFlags?.slice(0, 2).map((flag) => <Badge key={flag} variant="red">{flag}</Badge>)}
                   </div>
                 </div>
               ))}
@@ -184,15 +191,15 @@ export default function DashboardPage() {
         <div className="stat-rail">
           <div className="stat-rail-card">
             <strong>{stats?.pendingApplications || 0}</strong>
-            <span>startup applications still waiting on human review</span>
+            <span>startup applications remain under administrative review</span>
           </div>
           <div className="stat-rail-card">
             <strong>{stats?.programmePoolAssignments || 0}</strong>
-            <span>programme-pool assignments already approved across the ecosystem</span>
+            <span>programme-pool assignments are approved across the active portfolio</span>
           </div>
           <div className="stat-rail-card">
             <strong>{stats?.activeRelationships || 0}</strong>
-            <span>active governed relationships currently running inside programme contexts</span>
+            <span>governed relationships are currently active inside programme contexts</span>
           </div>
         </div>
       </div>

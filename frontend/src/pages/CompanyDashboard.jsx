@@ -51,9 +51,22 @@ export default function CompanyDashboard({ user }) {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>Welcome, {user.name}</h2>
-        <p>Your programme applications, accepted cohorts, and mentor assignments.</p>
+      <div className="hero-panel page-hero-compact">
+        <div className="hero-kicker">Startup Workspace</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>{user.name} / programme progress overview</h2>
+            <p>
+              Review applications, accepted programme positions, and governed mentor pathways in one structured workspace.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{applications.filter((item) => item.status === 'Accepted').length} accepted programmes</strong>
+              <span>Accepted placements are the only programmes eligible for mentor activation.</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="stat-grid">
@@ -77,7 +90,7 @@ export default function CompanyDashboard({ user }) {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>My Programmes</h3>
+          <h3>Programme Application Register</h3>
         </div>
         {applications.length === 0 ? (
           <div className="empty-state"><p>No programme applications yet.</p></div>
@@ -94,7 +107,7 @@ export default function CompanyDashboard({ user }) {
               {applications.map((item) => (
                 <tr key={item.id}>
                   <td style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</td>
-                  <td><ScoreBadge score={item.aiFitScore} /></td>
+                  <td><ScoreBadge score={item.aiFitScore} label="Programme fit" /></td>
                   <td><StatusPill status={item.status} /></td>
                 </tr>
               ))}
@@ -105,7 +118,7 @@ export default function CompanyDashboard({ user }) {
 
       <div className="card">
         <div className="card-header">
-          <h3>Mentor Path</h3>
+          <h3>Mentor Pathway</h3>
         </div>
         {(mentorRecommendations.length === 0 && mentorRelationships.length === 0) ? (
           <div className="empty-state"><p>No mentor recommendations yet.</p></div>
@@ -116,7 +129,7 @@ export default function CompanyDashboard({ user }) {
                 <th>Mentor</th>
                 <th>Programme</th>
                 <th>Score / Status</th>
-                <th>Why</th>
+                <th>Rationale</th>
               </tr>
             </thead>
             <tbody>
@@ -124,7 +137,7 @@ export default function CompanyDashboard({ user }) {
                 <tr key={item.id}>
                   <td style={{ fontWeight: 600 }}>{contributorNames[item.targetEntityId] || item.targetEntityId}</td>
                   <td>{programmeNames[item.programmeId] || item.programmeId}</td>
-                  <td><ScoreBadge score={item.matchScore} /></td>
+                  <td><ScoreBadge score={item.matchScore} label="Mentor fit" /></td>
                   <td className="match-explanation">{item.explanation}</td>
                 </tr>
               ))}

@@ -89,7 +89,7 @@ export default function ProgrammeDetailPage() {
             <h2>{programme.name}</h2>
             <p>
               This programme controls startup admission, governs contributor pool access,
-              and activates mentor matching only after acceptance.
+              and activates mentor matching only after formal acceptance.
             </p>
             <div className="hero-actions">
               <button className="btn btn-outline" onClick={() => navigate('/programmes')}>Back to Programmes</button>
@@ -106,7 +106,7 @@ export default function ProgrammeDetailPage() {
             </div>
             <div className="hero-chip">
               <strong>{poolAssignments.filter((item) => item.status === 'Approved').length} approved pool actors</strong>
-              <span>Programme resources are controlled explicitly instead of open marketplace access.</span>
+              <span>Programme resources are controlled through explicit approval.</span>
             </div>
           </div>
         </div>
@@ -116,11 +116,11 @@ export default function ProgrammeDetailPage() {
         <div className="flow-step">
           <div className="step-index">1</div>
           <strong>Programme fit</strong>
-          <span>AI evaluates startups against sector, stage, and expected outcomes.</span>
+          <span>AI evaluates startups against sector, stage, and expected outcome criteria.</span>
         </div>
         <div className="flow-step">
           <div className="step-index">2</div>
-          <strong>Admin admission</strong>
+          <strong>Administrative admission</strong>
           <span>Accepted startups become eligible for programme resources and mentor matching.</span>
         </div>
         <div className="flow-step">
@@ -137,7 +137,7 @@ export default function ProgrammeDetailPage() {
 
       <div className="detail-sections">
         <div className="card glass-panel">
-          <h3 style={{ marginBottom: 16 }}>Programme Overview</h3>
+          <h3 style={{ marginBottom: 16 }}>Programme Governance Profile</h3>
           <div className="detail-field">
             <label>Target Sectors</label>
             <div className="entity-tags">{programme.targetSectors?.map((item) => <Badge key={item} variant="blue">{item}</Badge>)}</div>
@@ -184,7 +184,7 @@ export default function ProgrammeDetailPage() {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>Startup Applications</h3>
+          <h3>Startup Application Register</h3>
         </div>
         {applications.length === 0 ? (
           <div className="empty-state"><p>No applications for this programme yet.</p></div>
@@ -202,7 +202,7 @@ export default function ProgrammeDetailPage() {
               {applications.map((item) => (
                 <tr key={item.id}>
                   <td style={{ fontWeight: 600 }}>{startupNames[item.startupId] || item.startupId}</td>
-                  <td><ScoreBadge score={item.aiFitScore} /></td>
+                  <td><ScoreBadge score={item.aiFitScore} label="Programme fit" /></td>
                   <td><StatusPill status={item.status} /></td>
                   <td>
                     {item.status === 'Accepted' ? (
@@ -211,10 +211,10 @@ export default function ProgrammeDetailPage() {
                         onClick={() => generateMentorRecommendations(item.startupId)}
                         disabled={busyStartupId === item.startupId}
                       >
-                        {busyStartupId === item.startupId ? 'Generating...' : 'Recommend Mentor'}
+                        {busyStartupId === item.startupId ? 'Generating...' : 'Generate Mentor Recommendations'}
                       </button>
                     ) : (
-                      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Accept startup first</span>
+                      <span className="review-note">Accept startup first</span>
                     )}
                   </td>
                 </tr>
@@ -227,7 +227,7 @@ export default function ProgrammeDetailPage() {
       <div className="two-col" style={{ marginBottom: 20 }}>
         <div className="card glass-panel">
           <div className="card-header">
-            <h3>Mentor Pool</h3>
+            <h3>Approved Mentor Pool</h3>
           </div>
           {mentorPool.length === 0 ? (
             <div className="empty-state"><p>No mentors approved for this programme.</p></div>
@@ -244,7 +244,7 @@ export default function ProgrammeDetailPage() {
         </div>
         <div className="card glass-panel">
           <div className="card-header">
-            <h3>Programme Resource Pool</h3>
+            <h3>Approved Resource Pool</h3>
           </div>
           {resourcePool.length === 0 ? (
             <div className="empty-state"><p>No approved resource contributors yet.</p></div>
@@ -263,7 +263,7 @@ export default function ProgrammeDetailPage() {
 
       <div className="card">
         <div className="card-header">
-          <h3>Programme Recommendations and Relationships</h3>
+          <h3>Programme Recommendation and Relationship Register</h3>
         </div>
         {(recommendations.length === 0 && relationships.length === 0) ? (
           <div className="empty-state"><p>No recommendations or relationships yet.</p></div>
@@ -280,7 +280,7 @@ export default function ProgrammeDetailPage() {
                   </div>
                   <StatusPill status={item.status} />
                 </div>
-                <p>{item.explanation}</p>
+                <p className="recommendation-copy">{item.explanation}</p>
               </div>
             ))}
             {relationships.map((item) => (
@@ -292,7 +292,7 @@ export default function ProgrammeDetailPage() {
                   </div>
                   <StatusPill status={item.status} />
                 </div>
-                <p>{item.expectedOutcome}</p>
+                <p className="recommendation-copy">{item.expectedOutcome}</p>
               </div>
             ))}
           </div>

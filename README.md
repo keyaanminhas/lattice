@@ -32,7 +32,7 @@ AI_TEAM_PLAN.md            Team coordination notes from the hackathon build
 
 - Frontend: React 19, Vite, React Router, Firebase Web SDK
 - Backend: Firebase Functions for Python, Firestore
-- AI: Gemini 2.5 Flash for generation, `gemini-embedding-2` for semantic matching
+- AI: Gemini 3.1 Flash-Lite for generation, `gemini-embedding-2` for semantic matching
 - Local tooling: Firebase Emulator Suite
 
 ## Product Model
@@ -72,6 +72,28 @@ This is the main design constraint to preserve in future changes. Do not collaps
 - `summarise_company_profile`: alias-style callable for company summary consumers.
 - `get_ai_insights`: returns four ecosystem insight cards plus supporting stats.
 - `get_dashboard_stats`: returns dashboard KPI totals and rates.
+
+## How The Backend And AI Work
+
+In brief, the backend follows a read-score-explain-approve-learn cycle:
+
+1. The frontend calls a Firebase callable function in `functions/main.py`.
+2. The function reads the relevant Firestore documents for startups, programmes, contributors, applications, or relationships.
+3. For matching flows, the backend builds text representations, ensures embeddings exist, computes cosine similarity, and blends that with deterministic fit checks like sector overlap, stage fit, geography, eligibility, and availability.
+4. If a candidate passes the score threshold, Gemini generates the explanation text while Firestore stores the recommendation as `Pending Approval`.
+5. When an admin approves a recommendation, the backend materializes the next object in the workflow: an application, a programme-contributor pool assignment, or an active relationship.
+6. When a relationship finishes, `submit_outcome` stores ratings and feedback, asks Gemini for a one-line lesson, and saves that lesson for future ecosystem insight and reuse.
+
+Important backend rule: mentor matching is blocked unless the startup has already been accepted into the programme and the mentor is already part of that programme's approved contributor pool.
+
+The AI is used in four narrow places rather than running the whole system end-to-end:
+
+- embeddings: `gemini-embedding-2` converts startup, programme, and contributor text into vectors for semantic similarity
+- explanations: Gemini 3.1 Flash-Lite turns scored matches into short human-readable reasoning plus risk framing
+- summaries: Gemini returns structured JSON for startup profile summaries used by the UI
+- learning and insights: Gemini writes one-line outcome lessons and four-card ecosystem insight summaries from stored data
+
+So the backend makes the actual workflow decisions, thresholds, and state transitions, while the AI improves understanding, semantic fit, and explanation quality on top of that logic.
 
 ## Demo Roles
 
@@ -187,7 +209,7 @@ Current stack:
 - React + Vite frontend in /frontend
 - Firebase callable functions in /functions/main.py
 - Firestore as the source of truth
-- Gemini 2.5 Flash for summaries, explanations, lessons, and insights
+- Gemini 3.1 Flash-Lite for summaries, explanations, lessons, and insights
 - gemini-embedding-2 for semantic similarity
 
 Core product rule:

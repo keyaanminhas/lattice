@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
-import { Badge, Spinner } from '../components/Shared';
+import { Badge, StarRating, Spinner } from '../components/Shared';
 
 export default function InsightsPage() {
   const [insights, setInsights] = useState(null);
@@ -36,9 +36,23 @@ export default function InsightsPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h2>AI Insights</h2>
-        <p>Programme-level learning loops, resource gaps, and reusable matching patterns.</p>
+      <div className="hero-panel page-hero-compact">
+        <div className="hero-kicker">AI Intelligence Layer</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>Review system-wide demand, outcome quality, and reusable learning patterns.</h2>
+            <p>
+              This view translates Lattice activity into portfolio-level signals so programme leads can understand
+              demand pressure, delivery quality, and where the matching system is strongest or weakest.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{outcomes.length} recorded outcomes</strong>
+              <span>Each completed relationship adds more evidence for future recommendation quality.</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style={{ marginBottom: 24 }}>
@@ -100,20 +114,32 @@ export default function InsightsPage() {
         {outcomes.length === 0 ? (
           <div className="empty-state"><p>No outcomes recorded yet.</p></div>
         ) : (
-          <div>
+          <div className="stack-list">
             {outcomes.map((item) => (
-              <div key={item.id} style={{ padding: '14px 0', borderBottom: '1px solid var(--color-border)' }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+              <div key={item.id} className="stack-item recommendation-item">
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
                   <Badge variant={item.outcomeAchieved === 'Yes' ? 'green' : item.outcomeAchieved === 'Partial' ? 'yellow' : 'red'}>
                     {item.outcomeAchieved}
                   </Badge>
                   <Badge variant="gray">{item.relationshipQuality} Quality</Badge>
                 </div>
+                <div className="ai-score-grid">
+                  <div className="ai-score-card">
+                    <span>Startup Rating</span>
+                    <strong>{item.startupRating}/5</strong>
+                    <StarRating value={item.startupRating} caption="Founder experience" />
+                  </div>
+                  <div className="ai-score-card">
+                    <span>Contributor Rating</span>
+                    <strong>{item.contributorRating}/5</strong>
+                    <StarRating value={item.contributorRating} caption="Contributor experience" />
+                  </div>
+                </div>
                 <p style={{ fontSize: 13, marginBottom: 4 }}>
-                  <strong>Startup:</strong> "{item.startupFeedback}" ({item.startupRating}/5)
+                  <strong>Startup:</strong> "{item.startupFeedback}"
                 </p>
                 <p style={{ fontSize: 13, marginBottom: 4 }}>
-                  <strong>Contributor:</strong> "{item.contributorFeedback}" ({item.contributorRating}/5)
+                  <strong>Contributor:</strong> "{item.contributorFeedback}"
                 </p>
                 <p style={{ fontSize: 13, marginBottom: 4 }}>
                   <strong>Admin:</strong> {item.adminEvaluation}

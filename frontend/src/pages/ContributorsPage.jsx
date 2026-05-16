@@ -46,6 +46,25 @@ export default function ContributorsPage() {
 
   return (
     <div>
+      <div className="hero-panel page-hero-compact">
+        <div className="hero-kicker">Contributor Registry</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>Maintain a governed view of mentors and resource actors.</h2>
+            <p>
+              Contributor records are screened through type, availability, expertise, and programme-pool placement
+              to keep downstream recommendations reliable and operationally practical.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{contributors.length} contributor records</strong>
+              <span>Mentors, investors, partners, and service providers are held in one structured registry.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="page-header">
         <h2>Contributors</h2>
         <p>{contributors.length} mentors, partners, investors, and service providers governed through programme pools</p>
@@ -66,8 +85,8 @@ export default function ContributorsPage() {
 
       <div className="card-grid">
         {filtered.map((item) => (
-          <div key={item.id} className="entity-card" style={{ cursor: 'default' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div key={item.id} className="entity-card entity-card-static">
+            <div className="entity-card-top">
               <div>
                 <h4>{item.name}</h4>
                 <div className="entity-meta">{(item.contributorTypes || [item.type]).join(', ')}</div>
@@ -76,16 +95,17 @@ export default function ContributorsPage() {
                 {item.availability}
               </Badge>
             </div>
-            <div className="entity-tags" style={{ marginBottom: 10 }}>
+            <div className="entity-tags entity-tag-row">
               {(item.expertise || item.investmentThesis || []).slice(0, 4).map((tag) => (
                 <Badge key={tag} variant="blue">{tag}</Badge>
               ))}
             </div>
-            <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', marginBottom: 8 }}>
+            <div className="entity-summary entity-summary-tight">
               Supports {item.supportedStages?.join(', ') || item.stages?.join(', ') || 'programme-specific stages'}
             </div>
-            <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-              {poolCounts[item.id] || 0} programme pool assignments
+            <div className="entity-facts">
+              <div className="entity-fact"><span>Programme Pools</span><strong>{poolCounts[item.id] || 0}</strong></div>
+              <div className="entity-fact"><span>Coverage</span><strong>{item.countryCoverage?.length || 0}</strong></div>
             </div>
           </div>
         ))}
