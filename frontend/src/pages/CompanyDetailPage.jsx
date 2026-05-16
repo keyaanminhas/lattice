@@ -1,194 +1,292 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
 export default function CompanyDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [company, setCompany] = useState(null);
-  const [matches, setMatches] = useState([]);
+  const [startup, setStartup] = useState(null);
+  const [applications, setApplications] = useState([]);
+  const [recommendations, setRecommendations] = useState([]);
+  const [relationships, setRelationships] = useState([]);
   const [aiProfile, setAiProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(false);
-  const [contributors, setContributors] = useState({});
+  const [generatingProgrammes, setGeneratingProgrammes] = useState(false);
+  const [generatingMentorFor, setGeneratingMentorFor] = useState('');
+  const [programmeNames, setProgrammeNames] = useState({});
+  const [contributorNames, setContributorNames] = useState({});
 
   useEffect(() => {
     async function load() {
-      // Load company
-      const compDoc = await getDoc(doc(db, 'companies', id));
-      if (compDoc.exists()) {
-        setCompany({ id: compDoc.id, ...compDoc.data() });
-      }
+      const [startupDoc, programmeSnap, contributorSnap, appSnap, recSnap, relSnap] = await Promise.all([
+        getDoc(doc(db, 'companies', id)),
+        getDocs(collection(db, 'programmes')),
+        getDocs(collection(db, 'contributors')),
+        getDocs(query(collection(db, 'applications'), where('startupId', '==', id))),
+        getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', id))),
+        getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', id))),
+      ]);
 
-      // Load contributor names for display
-      const contSnap = await getDocs(collection(db, 'contributors'));
-      const contMap = {};
-      contSnap.forEach((d) => { contMap[d.id] = d.data().name; });
-      setContributors(contMap);
+      if (startupDoc.exists()) setStartup({ id: startupDoc.id, ...startupDoc.data() });
 
-      // Load matches for this company
-      const q = query(collection(db, 'relationships'), where('sourceId', '==', id));
-      const matchSnap = await getDocs(q);
-      const list = [];
-      matchSnap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-      list.sort((a, b) => (b.aiMatchScore || 0) - (a.aiMatchScore || 0));
-      setMatches(list);
+      const programmeMap = {};
+      programmeSnap.forEach((item) => { programmeMap[item.id] = item.data().name; });
+      const contributorMap = {};
+      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+      setProgrammeNames(programmeMap);
+      setContributorNames(contributorMap);
 
+      const appList = [];
+      appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
+      const recList = [];
+      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
+      const relList = [];
+      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
+
+      setApplications(appList);
+      setRecommendations(recList);
+      setRelationships(relList);
       setLoading(false);
     }
+
     load();
   }, [id]);
+
+  async function refreshRecommendations() {
+    const recSnap = await getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', id)));
+    const recList = [];
+    recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
+    setRecommendations(recList);
+  }
+
+  async function generateProgrammeRecommendations() {
+    setGeneratingProgrammes(true);
+    try {
+      const recommend = httpsCallable(functions, 'recommend_programmes_for_startup');
+      await recommend({ startupId: id });
+      await refreshRecommendations();
+    } catch (error) {
+      console.error('Programme recommendation failed:', error);
+      alert('Failed to generate programme recommendations.');
+    }
+    setGeneratingProgrammes(false);
+  }
+
+  async function generateMentorRecommendations(programmeId) {
+    setGeneratingMentorFor(programmeId);
+    try {
+      const recommend = httpsCallable(functions, 'recommend_mentor_for_startup');
+      await recommend({ startupId: id, programmeId });
+      await refreshRecommendations();
+    } catch (error) {
+      console.error('Mentor recommendation failed:', error);
+      alert('Failed to generate mentor recommendations.');
+    }
+    setGeneratingMentorFor('');
+  }
 
   async function loadAIProfile() {
     setProfileLoading(true);
     try {
-      const summarise = httpsCallable(functions, 'summarise_company_profile');
-      const result = await summarise({ companyId: id });
+      const summarise = httpsCallable(functions, 'summarise_startup_profile');
+      const result = await summarise({ startupId: id });
       setAiProfile(result.data.profile);
-    } catch (e) {
-      console.error('AI profile failed:', e);
+    } catch (error) {
+      console.error('AI profile failed:', error);
     }
     setProfileLoading(false);
   }
 
   if (loading) return <Spinner />;
-  if (!company) return <div className="empty-state"><p>Company not found.</p></div>;
+  if (!startup) return <div className="empty-state"><p>Startup not found.</p></div>;
+
+  const mentorRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Mentor');
+  const programmeRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Programme');
 
   return (
     <div>
       <div className="detail-header">
         <div>
           <button className="btn btn-sm btn-outline" onClick={() => navigate('/companies')} style={{ marginBottom: 12 }}>
-            ← Back to Companies
+            ← Back to Startups
           </button>
-          <h2>{company.name}</h2>
+          <h2>{startup.name}</h2>
           <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-            <Badge variant="blue">{company.industry}</Badge>
-            <Badge variant="gray">{company.stage}</Badge>
-            <StatusPill status={company.verificationStatus} />
+            <Badge variant="blue">{startup.industry || startup.sector}</Badge>
+            <Badge variant="gray">{startup.stage}</Badge>
+            <StatusPill status={startup.verificationStatus} />
           </div>
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
+            {profileLoading ? 'Analyzing...' : 'Summarize Profile'}
+          </button>
+          <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
+            {generatingProgrammes ? 'Generating...' : 'Recommend Programmes'}
+          </button>
         </div>
       </div>
 
-      {/* Company Info */}
       <div className="detail-sections">
         <div className="card">
-          <h3 style={{ marginBottom: 16 }}>Company Profile</h3>
+          <h3 style={{ marginBottom: 16 }}>Startup Profile</h3>
           <div className="detail-field">
             <label>Problem Statement</label>
-            <p>{company.problemStatement}</p>
+            <p>{startup.problemStatement}</p>
           </div>
           <div className="detail-field">
             <label>Product</label>
-            <p>{company.productDescription}</p>
+            <p>{startup.productDescription}</p>
           </div>
           <div className="detail-field">
-            <label>Country</label>
-            <p>{company.country}</p>
-          </div>
-          <div className="detail-field">
-            <label>Team Size</label>
-            <p>{company.teamSize} people</p>
+            <label>Traction</label>
+            <p>{startup.traction || 'No traction summary yet.'}</p>
           </div>
           <div className="detail-field">
             <label>Support Needs</label>
-            <div className="entity-tags" style={{ marginTop: 4 }}>
-              {company.supportNeeds?.map((n) => <Badge key={n} variant="blue">{n}</Badge>)}
-            </div>
+            <div className="entity-tags">{startup.supportNeeds?.map((item) => <Badge key={item} variant="blue">{item}</Badge>)}</div>
           </div>
           <div className="detail-field">
             <label>Current Challenges</label>
-            <div className="entity-tags" style={{ marginTop: 4 }}>
-              {company.currentChallenges?.map((c) => <Badge key={c} variant="yellow">{c}</Badge>)}
-            </div>
+            <div className="entity-tags">{startup.currentChallenges?.map((item) => <Badge key={item} variant="yellow">{item}</Badge>)}</div>
           </div>
         </div>
 
-        {/* AI Profile */}
         <div className="card">
           <div className="card-header">
-            <h3>AI Profile Summary</h3>
-            {!aiProfile && (
-              <button className="btn btn-sm btn-primary" onClick={loadAIProfile} disabled={profileLoading}>
-                {profileLoading ? 'Analyzing...' : 'Generate AI Profile'}
-              </button>
-            )}
+            <h3>AI Startup Summary</h3>
           </div>
           {profileLoading && <Spinner />}
           {aiProfile ? (
             <div className="ai-profile">
               <div className="detail-field">
-                <label>Executive Summary</label>
+                <label>Summary</label>
                 <p>{aiProfile.summary}</p>
               </div>
               <div className="detail-field">
+                <label>Profile Completeness</label>
+                <p>{aiProfile.profileCompletenessScore} / 100</p>
+              </div>
+              <div className="detail-field">
                 <label>Readiness Score</label>
-                <div className="readiness-score">{aiProfile.readinessScore}</div>
-                <span style={{ fontSize: 12, color: 'var(--color-text-muted)', marginLeft: 8 }}>/ 10</span>
+                <p>{aiProfile.readinessScore} / 10</p>
               </div>
               <div className="detail-field">
                 <label>Auto Tags</label>
-                <div className="entity-tags" style={{ marginTop: 4 }}>
-                  {aiProfile.autoTags?.map((t) => <Badge key={t} variant="blue">{t}</Badge>)}
-                </div>
+                <div className="entity-tags">{aiProfile.autoTags?.map((item) => <Badge key={item} variant="blue">{item}</Badge>)}</div>
               </div>
               <div className="detail-field">
-                <label>Suggested Programmes</label>
-                <div className="entity-tags" style={{ marginTop: 4 }}>
-                  {aiProfile.suggestedProgrammes?.map((p) => <Badge key={p} variant="green">{p}</Badge>)}
-                </div>
+                <label>Suggested Programme Types</label>
+                <div className="entity-tags">{aiProfile.suggestedProgrammeTypes?.map((item) => <Badge key={item} variant="green">{item}</Badge>)}</div>
               </div>
               <div className="detail-field">
                 <label>Risk Flags</label>
-                <div className="entity-tags" style={{ marginTop: 4 }}>
-                  {aiProfile.riskFlags?.map((r) => <Badge key={r} variant="red">{r}</Badge>)}
-                </div>
+                <div className="entity-tags">{aiProfile.riskFlags?.map((item) => <Badge key={item} variant="red">{item}</Badge>)}</div>
               </div>
             </div>
           ) : (
-            !profileLoading && (
-              <div className="empty-state">
-                <p>Click "Generate AI Profile" to get an AI-powered analysis.</p>
-              </div>
-            )
+            !profileLoading && <div className="empty-state"><p>Generate an AI summary to inspect readiness and programme fit.</p></div>
           )}
         </div>
       </div>
 
-      {/* Matches */}
-      <div className="card">
+      <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>AI-Recommended Matches ({matches.length})</h3>
+          <h3>Programme Applications</h3>
         </div>
-        {matches.length === 0 ? (
-          <div className="empty-state"><p>No matches found for this company.</p></div>
+        {applications.length === 0 ? (
+          <div className="empty-state"><p>No programme applications yet.</p></div>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Contributor</th>
-                <th>Type</th>
-                <th>Score</th>
-                <th>AI Explanation</th>
+                <th>Programme</th>
+                <th>AI Fit</th>
                 <th>Status</th>
+                <th>Mentor Matching</th>
               </tr>
             </thead>
             <tbody>
-              {matches.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 600 }}>{contributors[m.targetId] || m.targetId}</td>
-                  <td>{m.type}</td>
-                  <td><ScoreBadge score={m.aiMatchScore} /></td>
-                  <td className="match-explanation">{m.aiExplanation?.substring(0, 200)}...</td>
-                  <td><StatusPill status={m.status} /></td>
+              {applications.map((item) => (
+                <tr key={item.id}>
+                  <td style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</td>
+                  <td><ScoreBadge score={item.aiFitScore} /></td>
+                  <td><StatusPill status={item.status} /></td>
+                  <td>
+                    {item.status === 'Accepted' ? (
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={() => generateMentorRecommendations(item.programmeId)}
+                        disabled={generatingMentorFor === item.programmeId}
+                      >
+                        {generatingMentorFor === item.programmeId ? 'Generating...' : 'Recommend Mentor'}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Admission required first</span>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
+      </div>
+
+      <div className="two-col">
+        <div className="card">
+          <div className="card-header">
+            <h3>Programme Recommendations</h3>
+          </div>
+          {programmeRecommendations.length === 0 ? (
+            <div className="empty-state"><p>No programme recommendations yet.</p></div>
+          ) : (
+            programmeRecommendations.map((item) => (
+              <div key={item.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--color-border)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+                  <div style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</div>
+                  <ScoreBadge score={item.matchScore} />
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.explanation}</div>
+                <div style={{ marginTop: 6 }}><StatusPill status={item.status} /></div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Mentor Recommendations & Active Mentor Links</h3>
+          </div>
+          {mentorRecommendations.length === 0 && relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor').length === 0 ? (
+            <div className="empty-state"><p>No mentor recommendations or links yet.</p></div>
+          ) : (
+            <div style={{ display: 'grid', gap: 12 }}>
+              {mentorRecommendations.map((item) => (
+                <div key={item.id} style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+                    <div style={{ fontWeight: 600 }}>{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
+                    <ScoreBadge score={item.matchScore} />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.explanation}</div>
+                  <div style={{ marginTop: 6 }}><StatusPill status={item.status} /></div>
+                </div>
+              ))}
+              {relationships.filter((item) => item.relationshipType === 'Startup-to-Mentor').map((item) => (
+                <div key={item.id} style={{ border: '1px solid var(--color-border)', borderRadius: 8, padding: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+                    <div style={{ fontWeight: 600 }}>{contributorNames[item.targetEntityId] || item.targetEntityId}</div>
+                    <StatusPill status={item.status} />
+                  </div>
+                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{item.expectedOutcome}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -2,19 +2,22 @@ import { NavLink } from 'react-router-dom';
 
 const adminNav = [
   { to: '/', icon: '📊', label: 'Dashboard' },
-  { to: '/companies', icon: '🏢', label: 'Companies' },
+  { to: '/programmes', icon: '🧭', label: 'Programmes' },
+  { to: '/companies', icon: '🏢', label: 'Startups' },
   { to: '/contributors', icon: '👥', label: 'Contributors' },
-  { to: '/matches', icon: '🤖', label: 'AI Matches' },
+  { to: '/matches', icon: '🤖', label: 'Recommendations' },
   { to: '/insights', icon: '💡', label: 'Insights' },
 ];
 
 const companyNav = [
-  { to: '/', icon: '🚀', label: 'My Matches' },
-  { to: '/contributors', icon: '👥', label: 'Browse Ecosystem' },
+  { to: '/', icon: '🚀', label: 'My Programmes' },
+  { to: '/programmes', icon: '🧭', label: 'Browse Programmes' },
+  { to: '/contributors', icon: '👥', label: 'Programme Contributors' },
 ];
 
 const contributorNav = [
-  { to: '/', icon: '🤝', label: 'Connection Requests' },
+  { to: '/', icon: '🤝', label: 'Programme Assignments' },
+  { to: '/programmes', icon: '🧭', label: 'Browse Programmes' },
   { to: '/companies', icon: '🏢', label: 'Browse Startups' },
 ];
 
@@ -25,7 +28,7 @@ export default function Sidebar({ user, onLogout }) {
     <aside className="sidebar">
       <div className="sidebar-logo">
         <h1>Lattice</h1>
-        <span>{user.role === 'admin' ? 'Admin Dashboard' : user.role === 'company' ? 'Startup Portal' : 'Mentor Portal'}</span>
+        <span>{user.role === 'admin' ? 'Programme Admin' : user.role === 'company' ? 'Startup Portal' : 'Contributor Portal'}</span>
       </div>
       
       <div style={{ padding: '20px 20px 0', fontSize: 13, color: '#fff', fontWeight: 500 }}>

@@ -10,6 +10,8 @@ import CompanyDetailPage from './pages/CompanyDetailPage';
 import ContributorsPage from './pages/ContributorsPage';
 import MatchesPage from './pages/MatchesPage';
 import InsightsPage from './pages/InsightsPage';
+import ProgrammesPage from './pages/ProgrammesPage';
+import ProgrammeDetailPage from './pages/ProgrammeDetailPage';
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -34,7 +36,6 @@ export default function App() {
             {/* Admin only routes */}
             {user.role === 'admin' && (
               <>
-                <Route path="/companies/:id" element={<CompanyDetailPage />} />
                 <Route path="/matches" element={<MatchesPage />} />
                 <Route path="/insights" element={<InsightsPage />} />
               </>
@@ -42,7 +43,10 @@ export default function App() {
 
             {/* Shared routes */}
             <Route path="/companies" element={<CompaniesPage />} />
+            <Route path="/companies/:id" element={<CompanyDetailPage />} />
             <Route path="/contributors" element={<ContributorsPage />} />
+            <Route path="/programmes" element={<ProgrammesPage />} />
+            <Route path="/programmes/:id" element={<ProgrammeDetailPage />} />
 
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />

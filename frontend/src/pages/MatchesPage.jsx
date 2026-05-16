@@ -2,143 +2,155 @@ import { useEffect, useState } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
-import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
 export default function MatchesPage() {
-  const [matches, setMatches] = useState([]);
-  const [companies, setCompanies] = useState({});
+  const [recommendations, setRecommendations] = useState([]);
+  const [startups, setStartups] = useState({});
   const [contributors, setContributors] = useState({});
+  const [programmes, setProgrammes] = useState({});
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('');
-  const [sortBy, setSortBy] = useState('score');
+  const [filterType, setFilterType] = useState('');
 
   useEffect(() => {
     async function load() {
-      // Load name lookup maps
-      const compSnap = await getDocs(collection(db, 'companies'));
-      const compMap = {};
-      compSnap.forEach((d) => { compMap[d.id] = d.data().name; });
-      setCompanies(compMap);
+      const [startupSnap, contributorSnap, programmeSnap, recSnap] = await Promise.all([
+        getDocs(collection(db, 'companies')),
+        getDocs(collection(db, 'contributors')),
+        getDocs(collection(db, 'programmes')),
+        getDocs(collection(db, 'recommendations')),
+      ]);
 
-      const contSnap = await getDocs(collection(db, 'contributors'));
-      const contMap = {};
-      contSnap.forEach((d) => { contMap[d.id] = d.data().name; });
-      setContributors(contMap);
+      const startupMap = {};
+      startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
+      const contributorMap = {};
+      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+      const programmeMap = {};
+      programmeSnap.forEach((item) => { programmeMap[item.id] = item.data().name; });
 
-      // Load all relationships
-      const relSnap = await getDocs(collection(db, 'relationships'));
-      const list = [];
-      relSnap.forEach((d) => list.push({ id: d.id, ...d.data() }));
-      setMatches(list);
+      const recList = [];
+      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
+
+      setStartups(startupMap);
+      setContributors(contributorMap);
+      setProgrammes(programmeMap);
+      setRecommendations(recList);
       setLoading(false);
     }
     load();
   }, []);
 
-  async function handleStatusChange(relId, newStatus) {
+  async function handleDecision(recommendationId, decision) {
     try {
-      const updateStatus = httpsCallable(functions, 'update_relationship_status');
-      await updateStatus({ relationshipId: relId, newStatus });
-      setMatches((prev) =>
-        prev.map((m) => (m.id === relId ? { ...m, status: newStatus } : m))
+      const review = httpsCallable(functions, 'review_recommendation');
+      await review({ recommendationId, decision });
+      setRecommendations((current) =>
+        current.map((item) => (item.id === recommendationId ? { ...item, status: decision } : item))
       );
-    } catch (e) {
-      console.error('Failed to update status:', e);
-      alert('Failed to update. Check emulator logs.');
+    } catch (error) {
+      console.error('Failed to review recommendation:', error);
+      alert('Failed to review recommendation. Check the function logs.');
     }
   }
 
   if (loading) return <Spinner />;
 
-  let filtered = matches;
-  if (filterStatus) {
-    filtered = filtered.filter((m) => m.status === filterStatus);
-  }
-
-  if (sortBy === 'score') {
-    filtered.sort((a, b) => (b.aiMatchScore || 0) - (a.aiMatchScore || 0));
-  }
+  const types = [...new Set(recommendations.map((item) => item.recommendationType))];
+  let filtered = recommendations;
+  if (filterStatus) filtered = filtered.filter((item) => item.status === filterStatus);
+  if (filterType) filtered = filtered.filter((item) => item.recommendationType === filterType);
+  filtered = [...filtered].sort((left, right) => (right.matchScore || 0) - (left.matchScore || 0));
 
   return (
     <div>
+      <div className="hero-panel">
+        <div className="hero-kicker">Approval Queue</div>
+        <div className="hero-title-row">
+          <div>
+            <h2>AI recommends. Programme admins decide.</h2>
+            <p>
+              This queue is now split across startup admissions, contributor-to-programme pool assignments,
+              and startup-to-mentor activation. Nothing becomes operational without review.
+            </p>
+          </div>
+          <div className="hero-chip-grid">
+            <div className="hero-chip">
+              <strong>{recommendations.filter((item) => item.status === 'Pending Approval').length} pending approvals</strong>
+              <span>These are the next decisions that will change programme state.</span>
+            </div>
+            <div className="hero-chip">
+              <strong>{recommendations.filter((item) => item.status === 'Approved').length} already approved</strong>
+              <span>Approved recommendations create programme assignments or active relationships.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="page-header">
-        <h2>AI Matches</h2>
-        <p>{matches.length} total relationships generated by the AI engine</p>
+        <h2>AI Recommendations</h2>
+        <p>{recommendations.length} pending or reviewed suggestions across admissions, programme pools, and mentor matching</p>
       </div>
 
       <div className="filter-bar">
         <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
           <option value="">All Statuses</option>
-          <option value="Recommended">Recommended</option>
+          <option value="Pending Approval">Pending Approval</option>
           <option value="Approved">Approved</option>
-          <option value="Active">Active</option>
           <option value="Rejected">Rejected</option>
-          <option value="Completed">Completed</option>
         </select>
-        <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-          <option value="score">Sort by Score (High → Low)</option>
+        <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+          <option value="">All Recommendation Types</option>
+          {types.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
       </div>
 
-      <div className="card">
-        {filtered.length === 0 ? (
-          <div className="empty-state"><p>No matches found.</p></div>
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Company</th>
-                <th>Contributor</th>
-                <th>Type</th>
-                <th>Score</th>
-                <th>AI Explanation</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((m) => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 600 }}>{companies[m.sourceId] || m.sourceId}</td>
-                  <td style={{ fontWeight: 500 }}>{contributors[m.targetId] || m.targetId}</td>
-                  <td style={{ fontSize: 12 }}>{m.type}</td>
-                  <td><ScoreBadge score={m.aiMatchScore} /></td>
-                  <td className="match-explanation">{m.aiExplanation?.substring(0, 150)}...</td>
-                  <td><StatusPill status={m.status} /></td>
-                  <td>
-                    <div className="match-actions">
-                      {m.status === 'Recommended' && (
-                        <>
-                          <button
-                            className="btn btn-sm btn-success"
-                            onClick={() => handleStatusChange(m.id, 'Approved')}
-                          >
-                            Approve
-                          </button>
-                          <button
-                            className="btn btn-sm btn-danger"
-                            onClick={() => handleStatusChange(m.id, 'Rejected')}
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-                      {m.status === 'Approved' && (
-                        <button
-                          className="btn btn-sm btn-primary"
-                          onClick={() => handleStatusChange(m.id, 'Active')}
-                        >
-                          Activate
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {filtered.length === 0 ? (
+        <div className="card"><div className="empty-state"><p>No recommendations found.</p></div></div>
+      ) : (
+        <div className="recommendation-grid">
+          {filtered.map((item) => (
+            <div key={item.id} className="recommendation-card">
+              <div className="stack-item-header">
+                <div>
+                  <h4>{item.recommendationType}</h4>
+                  <div className="stack-item-meta">{programmes[item.programmeId] || item.programmeId}</div>
+                </div>
+                <ScoreBadge score={item.matchScore} />
+              </div>
+              <div className="recommendation-meta">
+                <StatusPill status={item.status} />
+              </div>
+              <p>
+                Source: {startups[item.sourceEntityId] || contributors[item.sourceEntityId] || programmes[item.sourceEntityId] || item.sourceEntityId}
+              </p>
+              <p>
+                Target: {startups[item.targetEntityId] || contributors[item.targetEntityId] || programmes[item.targetEntityId] || item.targetEntityId}
+              </p>
+              <p style={{ marginTop: 10 }}>{item.explanation}</p>
+              {item.riskFlags?.length ? (
+                <div className="recommendation-meta">
+                  {item.riskFlags.map((flag) => <Badge key={flag} variant="red">{flag}</Badge>)}
+                </div>
+              ) : null}
+              {item.status === 'Pending Approval' ? (
+                <div className="recommendation-actions">
+                  <button className="btn btn-sm btn-success" onClick={() => handleDecision(item.id, 'Approved')}>
+                    Approve
+                  </button>
+                  <button className="btn btn-sm btn-danger" onClick={() => handleDecision(item.id, 'Rejected')}>
+                    Reject
+                  </button>
+                </div>
+              ) : (
+                <div className="recommendation-actions">
+                  <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Reviewed recommendation</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

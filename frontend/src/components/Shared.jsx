@@ -11,6 +11,8 @@ export function ScoreBadge({ score }) {
 
 export function StatusPill({ status }) {
   const map = {
+    Open: 'blue',
+    Accepted: 'green',
     Recommended: 'blue',
     Approved: 'green',
     Active: 'green',
@@ -18,6 +20,7 @@ export function StatusPill({ status }) {
     Rejected: 'red',
     'Needs Review': 'yellow',
     'Pending Approval': 'yellow',
+    'Pending Admin Review': 'yellow',
     Verified: 'green',
     Pending: 'yellow',
     Draft: 'gray',

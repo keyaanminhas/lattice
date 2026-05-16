@@ -1,32 +1,30 @@
-import requests
 import json
+
+import requests
 
 BASE = "http://127.0.0.1:5001/lattice-2026/us-central1"
 
+
 def call(fn_name, data=None):
-    """Call a Firebase callable function."""
     url = f"{BASE}/{fn_name}"
     payload = {"data": data or {}}
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"CALLING: {fn_name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     try:
-        resp = requests.post(url, json=payload, timeout=60)
-        print(f"Status: {resp.status_code}")
-        result = resp.json()
-        print(json.dumps(result, indent=2)[:2000])  # Truncate long output
+        response = requests.post(url, json=payload, timeout=90)
+        print(f"Status: {response.status_code}")
+        result = response.json()
+        print(json.dumps(result, indent=2)[:2500])
         return result
-    except Exception as e:
-        print(f"Error: {e}")
+    except Exception as exc:
+        print(f"Error: {exc}")
         return None
 
-# --- Test 1: Dashboard Stats (no AI, fast) ---
+
 call("get_dashboard_stats")
+call("summarise_startup_profile", {"startupId": "comp-1"})
+call("recommend_programmes_for_startup", {"startupId": "comp-5"})
+call("recommend_mentor_for_startup", {"startupId": "comp-1", "programmeId": "prog-2"})
 
-# --- Test 2: AI Profile Summary ---
-call("summarise_company_profile", {"companyId": "comp-3"})
-
-# --- Test 3: Generate matches for a single company ---
-call("generate_matches_for_company", {"companyId": "comp-5"})
-
-print("\n\nAll tests complete!")
+print("\nAll tests complete.")

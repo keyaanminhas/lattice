@@ -1,28 +1,51 @@
 import { useEffect, useState } from 'react';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
-import { ScoreBadge, StatusPill, Spinner, Badge } from '../components/Shared';
+import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
 export default function ContributorDashboard({ user }) {
-  const [matches, setMatches] = useState([]);
-  const [companies, setCompanies] = useState({});
+  const [poolAssignments, setPoolAssignments] = useState([]);
+  const [mentorLinks, setMentorLinks] = useState([]);
+  const [programmeNames, setProgrammeNames] = useState({});
+  const [startupNames, setStartupNames] = useState({});
+  const [recommendationScores, setRecommendationScores] = useState({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
-      // Load company names for display
-      const compSnap = await getDocs(collection(db, 'companies'));
-      const compMap = {};
-      compSnap.forEach((d) => { compMap[d.id] = d.data().name; });
-      setCompanies(compMap);
+      const [programmeSnap, startupSnap, poolSnap, relSnap, recSnap] = await Promise.all([
+        getDocs(collection(db, 'programmes')),
+        getDocs(collection(db, 'companies')),
+        getDocs(query(collection(db, 'programmeContributors'), where('contributorId', '==', user.id))),
+        getDocs(query(collection(db, 'relationships'), where('targetEntityId', '==', user.id))),
+        getDocs(query(collection(db, 'recommendations'), where('targetEntityId', '==', user.id))),
+      ]);
 
-      // Find matches where target contributor is user.id
-      const q = query(collection(db, 'relationships'), where('targetId', '==', user.id));
-      const snap = await getDocs(q);
-      const list = [];
-      snap.forEach((doc) => list.push({ id: doc.id, ...doc.data() }));
-      list.sort((a, b) => (b.aiMatchScore || 0) - (a.aiMatchScore || 0));
-      setMatches(list);
+      const programmeMap = {};
+      programmeSnap.forEach((item) => { programmeMap[item.id] = item.data().name; });
+      const startupMap = {};
+      startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
+      const scoreMap = {};
+      recSnap.forEach((item) => {
+        const data = item.data();
+        if (data.recommendationType === 'Startup-to-Mentor') {
+          scoreMap[`${data.sourceEntityId}_${data.programmeId}`] = data.matchScore;
+        }
+      });
+
+      const pools = [];
+      poolSnap.forEach((item) => pools.push({ id: item.id, ...item.data() }));
+      const links = [];
+      relSnap.forEach((item) => {
+        const data = item.data();
+        if (data.relationshipType === 'Startup-to-Mentor') links.push({ id: item.id, ...data });
+      });
+
+      setProgrammeNames(programmeMap);
+      setStartupNames(startupMap);
+      setRecommendationScores(scoreMap);
+      setPoolAssignments(pools);
+      setMentorLinks(links);
       setLoading(false);
     }
     load();
@@ -34,61 +57,79 @@ export default function ContributorDashboard({ user }) {
     <div>
       <div className="page-header">
         <h2>Welcome, {user.name}</h2>
-        <p>Review startups that the AI has matched with your expertise.</p>
+        <p>Your approved programme pools and startup mentorship assignments.</p>
       </div>
 
       <div className="stat-grid">
         <div className="stat-card">
-          <div className="stat-label">Pending Requests</div>
-          <div className="stat-value">{matches.filter(m => m.status === 'Approved').length}</div>
+          <div className="stat-label">Programme Pools</div>
+          <div className="stat-value">{poolAssignments.filter((item) => item.status === 'Approved').length}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Active Mentees / Partners</div>
-          <div className="stat-value">{matches.filter(m => m.status === 'Active').length}</div>
+          <div className="stat-label">Startup Mentor Links</div>
+          <div className="stat-value">{mentorLinks.length}</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Your Capacity</div>
-          <div className="stat-value">Available</div>
-          <div className="stat-sub">You can take 3 more startups</div>
+          <div className="stat-label">Active Links</div>
+          <div className="stat-value">{mentorLinks.filter((item) => item.status === 'Active').length}</div>
         </div>
       </div>
 
-      <div className="card">
+      <div className="card" style={{ marginBottom: 20 }}>
         <div className="card-header">
-          <h3>Connection Requests</h3>
+          <h3>Programme Assignments</h3>
         </div>
-        {matches.length === 0 ? (
-          <div className="empty-state"><p>No connection requests yet.</p></div>
+        {poolAssignments.length === 0 ? (
+          <div className="empty-state"><p>No programme assignments yet.</p></div>
         ) : (
           <table className="data-table">
             <thead>
               <tr>
-                <th>Startup Name</th>
-                <th>Match Score</th>
-                <th>AI Synergy Notes</th>
+                <th>Programme</th>
+                <th>Role</th>
                 <th>Status</th>
-                <th>Action</th>
               </tr>
             </thead>
             <tbody>
-              {matches.map(m => (
-                <tr key={m.id}>
-                  <td style={{ fontWeight: 600 }}>{companies[m.sourceId] || m.sourceId}</td>
-                  <td><ScoreBadge score={m.aiMatchScore} /></td>
-                  <td className="match-explanation">{m.aiExplanation}</td>
-                  <td><StatusPill status={m.status} /></td>
+              {poolAssignments.map((item) => (
+                <tr key={item.id}>
+                  <td style={{ fontWeight: 600 }}>{programmeNames[item.programmeId] || item.programmeId}</td>
+                  <td>{item.contributorType}</td>
+                  <td><StatusPill status={item.status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <h3>Startup Mentorship Relationships</h3>
+        </div>
+        {mentorLinks.length === 0 ? (
+          <div className="empty-state"><p>No startup mentorship assignments yet.</p></div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Startup</th>
+                <th>Programme</th>
+                <th>Recommendation Score</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mentorLinks.map((item) => (
+                <tr key={item.id}>
+                  <td style={{ fontWeight: 600 }}>{startupNames[item.sourceEntityId] || item.sourceEntityId}</td>
+                  <td>{programmeNames[item.programmeId] || item.programmeId}</td>
                   <td>
-                    {m.status === 'Approved' ? (
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        <button className="btn btn-sm btn-success">Accept</button>
-                        <button className="btn btn-sm btn-danger">Decline</button>
-                      </div>
-                    ) : m.status === 'Active' ? (
-                      <button className="btn btn-sm btn-outline">Message</button>
-                    ) : (
-                      <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>Pending Admin Review</span>
-                    )}
+                    {recommendationScores[`${item.sourceEntityId}_${item.programmeId}`]
+                      ? <ScoreBadge score={recommendationScores[`${item.sourceEntityId}_${item.programmeId}`]} />
+                      : 'Approved'}
                   </td>
+                  <td><StatusPill status={item.status} /></td>
                 </tr>
               ))}
             </tbody>
