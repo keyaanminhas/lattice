@@ -1,0 +1,56 @@
+{
+  "programmes": {
+    "description": "Structured initiatives supporting companies (e.g. Accelerators, Bootcamps)",
+    "schema": {
+      "id": "string (auto-generated)",
+      "name": "string (e.g. 'AI Startup Accelerator 2026')",
+      "type": "string (e.g. 'Accelerator', 'Grant')",
+      "targetSectors": ["string"],
+      "targetStages": ["string"],
+      "region": "string",
+      "expectedOutcomes": ["string"],
+      "status": "string ('Active', 'Draft', 'Completed')"
+    }
+  },
+  "companies": {
+    "description": "Startups or SMEs participating in the ecosystem",
+    "schema": {
+      "id": "string (auto-generated)",
+      "name": "string (e.g. 'MediScan AI')",
+      "industry": "string (e.g. 'Healthtech')",
+      "stage": "string (e.g. 'MVP', 'Seed')",
+      "country": "string",
+      "problemStatement": "string",
+      "supportNeeds": ["string"],
+      "verificationStatus": "string ('Verified', 'Pending', 'Rejected')"
+    }
+  },
+  "contributors": {
+    "description": "Mentors, partners, service providers, or investors",
+    "schema": {
+      "id": "string (auto-generated)",
+      "name": "string (e.g. 'Dr. Sarah Lim')",
+      "type": "string ('Mentor', 'Partner', 'Investor', 'Service Provider')",
+      "expertise": ["string"],
+      "supportedStages": ["string"],
+      "capacity": "number (e.g. 3)",
+      "availability": "string ('Available', 'Limited', 'Unavailable')",
+      "countryCoverage": ["string"]
+    }
+  },
+  "relationships": {
+    "description": "The AI-generated or manually created linkages between actors",
+    "schema": {
+      "id": "string (auto-generated)",
+      "type": "string ('Company-to-Mentor', 'Company-to-Programme', 'Company-to-Partner')",
+      "sourceId": "string (e.g. Company ID)",
+      "targetId": "string (e.g. Contributor ID or Programme ID)",
+      "programmeContextId": "string (Optional, ID of programme this linkage belongs to)",
+      "aiMatchScore": "number (0-100)",
+      "aiExplanation": "string",
+      "status": "string ('Recommended', 'Pending Approval', 'Approved', 'Active', 'Completed', 'Rejected')",
+      "expectedOutcome": "string",
+      "outcomeAchieved": "string ('Pending', 'Yes', 'Partial', 'No')"
+    }
+  }
+}
