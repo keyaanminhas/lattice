@@ -1,6 +1,7 @@
 """Quick test to find working embedding models with our API key."""
 import os
-os.environ["GEMINI_API_KEY"] = "AIzaSyATzjYFXYEVBE7CbNrdZYhKC5Li0qTXeD4"
+from dotenv import load_dotenv
+load_dotenv("functions/.env")
 
 from google import genai
 
