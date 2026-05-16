@@ -152,13 +152,16 @@ def generate_matches_for_company(req: https_fn.CallableRequest):
     company_data = company_doc.to_dict()
 
     # Build company text for embedding
-    company_text = (
-        f"Industry: {company_data.get('industry', '')}. "
-        f"Stage: {company_data.get('stage', '')}. "
-        f"Needs: {', '.join(company_data.get('supportNeeds', []))}. "
-        f"Problem: {company_data.get('problemStatement', '')}"
-    )
-    company_embedding = get_embedding(company_text)
+    if 'embeddingVector' in company_data:
+        company_embedding = company_data['embeddingVector']
+    else:
+        company_text = (
+            f"Industry: {company_data.get('industry', '')}. "
+            f"Stage: {company_data.get('stage', '')}. "
+            f"Needs: {', '.join(company_data.get('supportNeeds', []))}. "
+            f"Problem: {company_data.get('problemStatement', '')}"
+        )
+        company_embedding = get_embedding(company_text)
 
     # Fetch all contributors
     recommendations = []
@@ -167,12 +170,15 @@ def generate_matches_for_company(req: https_fn.CallableRequest):
         if cont_data.get('availability') == 'Unavailable' or cont_data.get('capacity', 0) <= 0:
             continue
 
-        cont_text = (
-            f"Type: {cont_data.get('type', '')}. "
-            f"Expertise: {', '.join(cont_data.get('expertise', []))}. "
-            f"Supported Stages: {', '.join(cont_data.get('supportedStages', []))}."
-        )
-        cont_embedding = get_embedding(cont_text)
+        if 'embeddingVector' in cont_data:
+            cont_embedding = cont_data['embeddingVector']
+        else:
+            cont_text = (
+                f"Type: {cont_data.get('type', '')}. "
+                f"Expertise: {', '.join(cont_data.get('expertise', []))}. "
+                f"Supported Stages: {', '.join(cont_data.get('supportedStages', []))}."
+            )
+            cont_embedding = get_embedding(cont_text)
 
         similarity = cosine_similarity(company_embedding, cont_embedding)
         score = round(similarity * 100, 2)
@@ -249,25 +255,31 @@ def generate_matches_for_programme(req: https_fn.CallableRequest):
         companies_processed += 1
 
         # Build embedding text
-        company_text = (
-            f"Industry: {comp_data.get('industry', '')}. "
-            f"Stage: {comp_data.get('stage', '')}. "
-            f"Needs: {', '.join(comp_data.get('supportNeeds', []))}. "
-            f"Problem: {comp_data.get('problemStatement', '')}"
-        )
-        company_embedding = get_embedding(company_text)
+        if 'embeddingVector' in comp_data:
+            company_embedding = comp_data['embeddingVector']
+        else:
+            company_text = (
+                f"Industry: {comp_data.get('industry', '')}. "
+                f"Stage: {comp_data.get('stage', '')}. "
+                f"Needs: {', '.join(comp_data.get('supportNeeds', []))}. "
+                f"Problem: {comp_data.get('problemStatement', '')}"
+            )
+            company_embedding = get_embedding(company_text)
 
         for cont_doc in db.collection('contributors').stream():
             cont_data = cont_doc.to_dict()
             if cont_data.get('availability') == 'Unavailable' or cont_data.get('capacity', 0) <= 0:
                 continue
 
-            cont_text = (
-                f"Type: {cont_data.get('type', '')}. "
-                f"Expertise: {', '.join(cont_data.get('expertise', []))}. "
-                f"Supported Stages: {', '.join(cont_data.get('supportedStages', []))}."
-            )
-            cont_embedding = get_embedding(cont_text)
+            if 'embeddingVector' in cont_data:
+                cont_embedding = cont_data['embeddingVector']
+            else:
+                cont_text = (
+                    f"Type: {cont_data.get('type', '')}. "
+                    f"Expertise: {', '.join(cont_data.get('expertise', []))}. "
+                    f"Supported Stages: {', '.join(cont_data.get('supportedStages', []))}."
+                )
+                cont_embedding = get_embedding(cont_text)
 
             similarity = cosine_similarity(company_embedding, cont_embedding)
             score = round(similarity * 100, 2)
