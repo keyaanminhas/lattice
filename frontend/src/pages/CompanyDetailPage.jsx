@@ -5,7 +5,13 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
-export default function CompanyDetailPage() {
+function docsToList(snapshot) {
+  const items = [];
+  snapshot.forEach((doc) => items.push({ id: doc.id, ...doc.data() }));
+  return items;
+}
+
+export default function CompanyDetailPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [startup, setStartup] = useState(null);
@@ -22,30 +28,54 @@ export default function CompanyDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const [startupDoc, programmeSnap, contributorSnap, appSnap, recSnap, relSnap] = await Promise.all([
-        getDoc(doc(db, 'companies', id)),
-        getDocs(collection(db, 'programmes')),
-        getDocs(collection(db, 'contributors')),
-        getDocs(query(collection(db, 'applications'), where('startupId', '==', id))),
-        getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', id))),
-        getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', id))),
-      ]);
+      const programmeQuery = user?.role === 'admin'
+        ? collection(db, 'programmes')
+        : query(collection(db, 'programmes'), where('status', 'in', ['Open', 'Active']));
+      const startupDoc = await getDoc(doc(db, 'companies', id));
 
       if (startupDoc.exists()) setStartup({ id: startupDoc.id, ...startupDoc.data() });
+
+      let programmeSnap;
+      let contributorSnap;
+      let appList = [];
+      let recList = [];
+      let relList = [];
+
+      if (user?.role === 'admin') {
+        const [loadedProgrammeSnap, loadedContributorSnap, appSnap, recSnap, relSnap] = await Promise.all([
+          getDocs(programmeQuery),
+          getDocs(collection(db, 'contributors')),
+          getDocs(query(collection(db, 'applications'), where('startupId', '==', id))),
+          getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', id))),
+          getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', id))),
+        ]);
+        programmeSnap = loadedProgrammeSnap;
+        contributorSnap = loadedContributorSnap;
+        appList = docsToList(appSnap);
+        recList = docsToList(recSnap);
+        relList = docsToList(relSnap);
+      } else {
+        const [loadedProgrammeSnap, recSnap, relSnap] = await Promise.all([
+          getDocs(programmeQuery),
+          getDocs(query(collection(db, 'recommendations'), where('targetEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('targetEntityId', '==', user.id))),
+        ]);
+        programmeSnap = loadedProgrammeSnap;
+        contributorSnap = null;
+        recList = docsToList(recSnap).filter((item) => item.sourceEntityId === id);
+        relList = docsToList(relSnap).filter((item) => item.sourceEntityId === id);
+      }
 
       const programmeMap = {};
       programmeSnap.forEach((item) => { programmeMap[item.id] = item.data().name; });
       const contributorMap = {};
-      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+      if (contributorSnap) {
+        contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+      } else if (user?.role === 'contributor') {
+        contributorMap[user.id] = user.name;
+      }
       setProgrammeNames(programmeMap);
       setContributorNames(contributorMap);
-
-      const appList = [];
-      appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
-      const recList = [];
-      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
-      const relList = [];
-      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
 
       setApplications(appList);
       setRecommendations(recList);
@@ -54,7 +84,7 @@ export default function CompanyDetailPage() {
     }
 
     load();
-  }, [id]);
+  }, [id, user]);
 
   async function refreshRecommendations() {
     const recSnap = await getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', id)));
@@ -106,6 +136,7 @@ export default function CompanyDetailPage() {
 
   const mentorRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Mentor');
   const programmeRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Programme');
+  const canRunAdminActions = user?.role === 'admin';
 
   return (
     <div>
@@ -121,14 +152,16 @@ export default function CompanyDetailPage() {
             <StatusPill status={startup.verificationStatus} />
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
-            {profileLoading ? 'Analyzing...' : 'Summarize Profile'}
-          </button>
-          <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
-            {generatingProgrammes ? 'Generating...' : 'Recommend Programmes'}
-          </button>
-        </div>
+        {canRunAdminActions ? (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button className="btn btn-outline" onClick={loadAIProfile} disabled={profileLoading}>
+              {profileLoading ? 'Analyzing...' : 'Summarize Profile'}
+            </button>
+            <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generatingProgrammes}>
+              {generatingProgrammes ? 'Generating...' : 'Recommend Programmes'}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="detail-sections">
@@ -217,7 +250,7 @@ export default function CompanyDetailPage() {
                   <td><ScoreBadge score={item.aiFitScore} /></td>
                   <td><StatusPill status={item.status} /></td>
                   <td>
-                    {item.status === 'Accepted' ? (
+                    {item.status === 'Accepted' && canRunAdminActions ? (
                       <button
                         className="btn btn-sm btn-primary"
                         onClick={() => generateMentorRecommendations(item.programmeId)}

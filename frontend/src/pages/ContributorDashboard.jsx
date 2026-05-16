@@ -14,7 +14,7 @@ export default function ContributorDashboard({ user }) {
   useEffect(() => {
     async function load() {
       const [programmeSnap, startupSnap, poolSnap, relSnap, recSnap] = await Promise.all([
-        getDocs(collection(db, 'programmes')),
+        getDocs(query(collection(db, 'programmes'), where('status', 'in', ['Open', 'Active']))),
         getDocs(collection(db, 'companies')),
         getDocs(query(collection(db, 'programmeContributors'), where('contributorId', '==', user.id))),
         getDocs(query(collection(db, 'relationships'), where('targetEntityId', '==', user.id))),

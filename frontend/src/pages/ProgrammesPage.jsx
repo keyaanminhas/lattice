@@ -1,10 +1,16 @@
 import { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { Badge, StatusPill, Spinner } from '../components/Shared';
 
-export default function ProgrammesPage() {
+function docsToList(snapshot) {
+  const items = [];
+  snapshot.forEach((doc) => items.push({ id: doc.id, ...doc.data() }));
+  return items;
+}
+
+export default function ProgrammesPage({ user }) {
   const [programmes, setProgrammes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({});
@@ -13,30 +19,55 @@ export default function ProgrammesPage() {
 
   useEffect(() => {
     async function load() {
-      const [programmeSnap, appSnap, poolSnap, relSnap] = await Promise.all([
-        getDocs(collection(db, 'programmes')),
-        getDocs(collection(db, 'applications')),
-        getDocs(collection(db, 'programmeContributors')),
-        getDocs(collection(db, 'relationships')),
-      ]);
+      const programmeQuery = user?.role === 'admin'
+        ? collection(db, 'programmes')
+        : query(collection(db, 'programmes'), where('status', 'in', ['Open', 'Active']));
+      const programmeSnap = await getDocs(programmeQuery);
+      const programmeList = docsToList(programmeSnap);
+      let applications = [];
+      let poolAssignments = [];
+      let relationships = [];
 
-      const programmeList = [];
-      programmeSnap.forEach((doc) => programmeList.push({ id: doc.id, ...doc.data() }));
+      if (user?.role === 'admin') {
+        const [appSnap, poolSnap, relSnap] = await Promise.all([
+          getDocs(collection(db, 'applications')),
+          getDocs(collection(db, 'programmeContributors')),
+          getDocs(collection(db, 'relationships')),
+        ]);
+        applications = docsToList(appSnap);
+        poolAssignments = docsToList(poolSnap);
+        relationships = docsToList(relSnap);
+      } else if (user?.role === 'company') {
+        const [appSnap, poolSnap, relSnap] = await Promise.all([
+          getDocs(query(collection(db, 'applications'), where('startupId', '==', user.id))),
+          getDocs(collection(db, 'programmeContributors')),
+          getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', user.id))),
+        ]);
+        applications = docsToList(appSnap);
+        poolAssignments = docsToList(poolSnap);
+        relationships = docsToList(relSnap);
+      } else if (user?.role === 'contributor') {
+        const [poolSnap, sourceRelSnap, targetRelSnap] = await Promise.all([
+          getDocs(query(collection(db, 'programmeContributors'), where('contributorId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('targetEntityId', '==', user.id))),
+        ]);
+        poolAssignments = docsToList(poolSnap);
+        relationships = [...docsToList(sourceRelSnap), ...docsToList(targetRelSnap)]
+          .filter((item, index, current) => current.findIndex((candidate) => candidate.id === item.id) === index);
+      }
 
       const aggregates = {};
-      appSnap.forEach((doc) => {
-        const item = doc.data();
+      applications.forEach((item) => {
         aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
         aggregates[item.programmeId].applications += 1;
         if (item.status === 'Accepted') aggregates[item.programmeId].accepted += 1;
       });
-      poolSnap.forEach((doc) => {
-        const item = doc.data();
+      poolAssignments.forEach((item) => {
         aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
         if (item.status === 'Approved') aggregates[item.programmeId].pools += 1;
       });
-      relSnap.forEach((doc) => {
-        const item = doc.data();
+      relationships.forEach((item) => {
         aggregates[item.programmeId] ||= { applications: 0, accepted: 0, pools: 0, mentorRelationships: 0 };
         if (item.relationshipType === 'Startup-to-Mentor' && item.status !== 'Rejected') {
           aggregates[item.programmeId].mentorRelationships += 1;
@@ -49,7 +80,7 @@ export default function ProgrammesPage() {
     }
 
     load();
-  }, []);
+  }, [user]);
 
   if (loading) return <Spinner />;
 

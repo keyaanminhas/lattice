@@ -11,6 +11,11 @@ from firebase_functions.options import set_global_options
 
 set_global_options(max_instances=10)
 
+try:
+    initialize_app(options={"projectId": os.environ.get("GCLOUD_PROJECT", "lattice-2026")})
+except ValueError:
+    pass
+
 MAX_RETRIES = 3
 RETRY_DELAY = 10
 
@@ -37,6 +42,237 @@ def _init_firebase():
     except ValueError:
         pass
     return firestore.client()
+
+
+def _require_account(req: https_fn.CallableRequest, db):
+    if not req.auth:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.UNAUTHENTICATED,
+            message="Sign in is required.",
+        )
+
+    account_doc = db.collection("accounts").document(req.auth.uid).get()
+    if not account_doc.exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="This login is not linked to a Lattice account.",
+        )
+
+    account = {"uid": req.auth.uid, **account_doc.to_dict()}
+    if account.get("status") == "Suspended":
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="This Lattice account is suspended.",
+        )
+    return account
+
+
+def _is_admin_account(account: dict) -> bool:
+    return account.get("status") == "Active" and account.get("accountType") in [
+        "organisation",
+        "organisationAdmin",
+        "platformAdmin",
+    ]
+
+
+def _require_admin(req: https_fn.CallableRequest, db):
+    account = _require_account(req, db)
+    if not _is_admin_account(account):
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="Admin access is required.",
+        )
+    return account
+
+
+def _require_startup_owner_or_admin(account: dict, startup_id: str):
+    if _is_admin_account(account):
+        return
+    if (
+        account.get("status") == "Active"
+        and account.get("accountType") == "startup"
+        and account.get("entityType") == "company"
+        and account.get("entityId") == startup_id
+    ):
+        return
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+        message="You can only access your own startup profile.",
+    )
+
+
+def _clean_string(value, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    return str(value).strip() or fallback
+
+
+def _clean_string_list(value) -> list[str]:
+    if isinstance(value, list):
+        return [_clean_string(item) for item in value if _clean_string(item)]
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
+def _clean_positive_int(value, fallback: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _require_profile_name(profile: dict, *keys: str) -> str:
+    for key in keys:
+        value = _clean_string(profile.get(key))
+        if value:
+            return value
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+        message="A profile name is required.",
+    )
+
+
+def _normalise_contributor_types(value) -> list[str]:
+    allowed = ["Mentor", "Partner", "Investor", "Service Provider"]
+    selected = [item for item in _clean_string_list(value) if item in allowed]
+    return list(dict.fromkeys(selected)) or ["Mentor"]
+
+
+def _registration_account(uid: str, account_type: str, entity_type: str, entity_id: str, display_name: str, email: str) -> dict:
+    return {
+        "accountType": account_type,
+        "entityType": entity_type,
+        "entityId": entity_id,
+        "displayName": display_name,
+        "email": email,
+        "status": "Pending",
+        "createdAt": firestore.SERVER_TIMESTAMP,
+        "lastLoginAt": firestore.SERVER_TIMESTAMP,
+    }
+
+
+@https_fn.on_call()
+def complete_entity_registration(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    if not req.auth:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.UNAUTHENTICATED,
+            message="Sign in is required to complete registration.",
+        )
+
+    data = req.data if isinstance(req.data, dict) else {}
+    account_type = _clean_string(data.get("accountType"))
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
+    if account_type not in ["startup", "contributor", "organisation"]:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+            message="accountType must be startup, contributor, or organisation.",
+        )
+
+    uid = req.auth.uid
+    auth_token = getattr(req.auth, "token", {}) or {}
+    email = _clean_string(auth_token.get("email") or profile.get("email"))
+    account_ref = db.collection("accounts").document(uid)
+    if account_ref.get().exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="This login already has a Lattice account.",
+        )
+
+    if account_type == "startup":
+        entity_type = "company"
+        entity_id = f"comp-{uid}"
+        display_name = _require_profile_name(profile, "name", "startupName", "companyName")
+        sector = _clean_string(profile.get("sector") or profile.get("industry"))
+        entity_payload = {
+            "id": entity_id,
+            "organisationId": f"org-startup-{uid}",
+            "name": display_name,
+            "companyName": display_name,
+            "sector": sector,
+            "industry": sector,
+            "stage": _clean_string(profile.get("stage"), "MVP"),
+            "country": _clean_string(profile.get("country"), "Malaysia"),
+            "teamSize": _clean_positive_int(profile.get("teamSize"), 1),
+            "problemStatement": _clean_string(profile.get("problemStatement")),
+            "productDescription": _clean_string(profile.get("productDescription")),
+            "supportNeeds": _clean_string_list(profile.get("supportNeeds")),
+            "traction": _clean_string(profile.get("traction")),
+            "currentChallenges": _clean_string_list(profile.get("currentChallenges")),
+            "verificationStatus": "Pending",
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        }
+        entity_ref = db.collection("companies").document(entity_id)
+    elif account_type == "contributor":
+        entity_type = "contributor"
+        entity_id = f"cont-{uid}"
+        display_name = _require_profile_name(profile, "name", "contributorName")
+        entity_payload = {
+            "id": entity_id,
+            "organisationId": f"org-contrib-{uid}",
+            "name": display_name,
+            "contributorTypes": _normalise_contributor_types(profile.get("contributorTypes")),
+            "expertise": _clean_string_list(profile.get("expertise")),
+            "supportedStages": _clean_string_list(profile.get("supportedStages")),
+            "investmentThesis": _clean_string_list(profile.get("investmentThesis")),
+            "ticketSize": _clean_string(profile.get("ticketSize")),
+            "countryCoverage": _clean_string_list(profile.get("countryCoverage")) or [_clean_string(profile.get("country"), "Malaysia")],
+            "canSupport": _clean_string_list(profile.get("canSupport")),
+            "capacity": {
+                "globalMaxProgrammes": _clean_positive_int(profile.get("globalMaxProgrammes"), 1),
+                "globalMaxStartupAssignments": _clean_positive_int(profile.get("globalMaxStartupAssignments"), 3),
+                "perProgrammeStartupCapacity": _clean_positive_int(profile.get("perProgrammeStartupCapacity"), 1),
+            },
+            "availability": _clean_string(profile.get("availability"), "Available"),
+            "status": "Pending",
+            "rating": 0,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        }
+        entity_ref = db.collection("contributors").document(entity_id)
+    else:
+        entity_type = "organisation"
+        entity_id = f"org-{uid}"
+        display_name = _require_profile_name(profile, "name", "organisationName")
+        entity_payload = {
+            "id": entity_id,
+            "name": display_name,
+            "organisationType": _clean_string(profile.get("organisationType"), "Programme Owner"),
+            "roles": _clean_string_list(profile.get("roles")) or ["Programme Owner"],
+            "country": _clean_string(profile.get("country"), "Malaysia"),
+            "focusAreas": _clean_string_list(profile.get("focusAreas")),
+            "status": "Pending",
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        }
+        entity_ref = db.collection("organisations").document(entity_id)
+
+    if entity_ref.get().exists:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            message="This entity registration already exists.",
+        )
+
+    account_payload = _registration_account(uid, account_type, entity_type, entity_id, display_name, email)
+    batch = db.batch()
+    batch.set(entity_ref, entity_payload)
+    batch.set(account_ref, account_payload)
+    batch.commit()
+
+    return {
+        "account": {
+            "accountType": account_type,
+            "entityType": entity_type,
+            "entityId": entity_id,
+            "displayName": display_name,
+            "email": email,
+            "status": "Pending",
+        },
+        "entity": {
+            "id": entity_id,
+            "status": "Pending",
+        },
+    }
 
 
 def _get_genai_client():
@@ -428,12 +664,14 @@ def _create_relationship(db, recommendation: dict, expected_outcome: str) -> str
 @https_fn.on_call()
 def recommend_programmes_for_startup(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     startup_id = req.data.get("startupId")
     if not startup_id:
         raise https_fn.HttpsError(
             code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
             message="startupId is required.",
         )
+    _require_startup_owner_or_admin(account, startup_id)
 
     startup_doc = db.collection("companies").document(startup_id).get()
     if not startup_doc.exists:
@@ -481,6 +719,7 @@ def recommend_programmes_for_startup(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     contributor_id = req.data.get("contributorId")
     if not contributor_id:
         raise https_fn.HttpsError(
@@ -541,6 +780,7 @@ def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def recommend_mentor_for_startup(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     startup_id = req.data.get("startupId")
     programme_id = req.data.get("programmeId")
     if not startup_id or not programme_id:
@@ -621,6 +861,7 @@ def recommend_mentor_for_startup(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def review_recommendation(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     recommendation_id = req.data.get("recommendationId")
     decision = req.data.get("decision")
     if not recommendation_id or decision not in ["Approved", "Rejected"]:
@@ -689,6 +930,7 @@ def review_recommendation(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def update_relationship_status(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     relationship_id = req.data.get("relationshipId")
     new_status = req.data.get("newStatus")
     valid_statuses = ["Approved", "Active", "Needs Review", "Completed", "Rejected", "Expired"]
@@ -714,6 +956,7 @@ def update_relationship_status(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def submit_outcome(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     data = req.data
     relationship_id = data.get("relationshipId")
     if not relationship_id:
@@ -730,6 +973,28 @@ def submit_outcome(req: https_fn.CallableRequest):
         )
 
     relationship = rel_doc.to_dict()
+    if not _is_admin_account(account):
+        if account.get("status") != "Active":
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+                message="This Lattice account must be active before submitting outcomes.",
+            )
+        owns_startup_side = (
+            account.get("accountType") == "startup"
+            and account.get("entityType") == "company"
+            and relationship.get("sourceEntityId") == account.get("entityId")
+        )
+        owns_contributor_side = (
+            account.get("accountType") == "contributor"
+            and account.get("entityType") == "contributor"
+            and relationship.get("targetEntityId") == account.get("entityId")
+        )
+        if not owns_startup_side and not owns_contributor_side:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+                message="You can only submit outcomes for your own relationships.",
+            )
+
     client = _get_genai_client()
     lesson_prompt = f"""
     You are the AI learning loop for a programme-first startup support platform.
@@ -776,6 +1041,7 @@ def submit_outcome(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def summarise_startup_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     client = _get_genai_client()
     startup_id = req.data.get("startupId")
     if not startup_id:
@@ -783,6 +1049,7 @@ def summarise_startup_profile(req: https_fn.CallableRequest):
             code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
             message="startupId is required.",
         )
+    _require_startup_owner_or_admin(account, startup_id)
 
     startup_doc = db.collection("companies").document(startup_id).get()
     if not startup_doc.exists:
@@ -826,6 +1093,7 @@ def summarise_startup_profile(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def summarise_company_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     client = _get_genai_client()
     company_id = req.data.get("companyId")
     if not company_id:
@@ -833,6 +1101,7 @@ def summarise_company_profile(req: https_fn.CallableRequest):
             code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
             message="companyId is required.",
         )
+    _require_startup_owner_or_admin(account, company_id)
 
     startup_doc = db.collection("companies").document(company_id).get()
     if not startup_doc.exists:
@@ -876,6 +1145,7 @@ def summarise_company_profile(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def get_ai_insights(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     client = _get_genai_client()
 
     startups = [doc.to_dict() for doc in db.collection("companies").stream()]
@@ -960,6 +1230,7 @@ def get_ai_insights(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def get_dashboard_stats(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     organisations = [doc.to_dict() for doc in db.collection("organisations").stream()]
     programmes = [doc.to_dict() for doc in db.collection("programmes").stream()]
     startups = [doc.to_dict() for doc in db.collection("companies").stream()]

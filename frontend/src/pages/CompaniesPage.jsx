@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../firebase';
 import { Badge, StatusPill, Spinner } from '../components/Shared';
 
-export default function CompaniesPage() {
+export default function CompaniesPage({ user }) {
   const [startups, setStartups] = useState([]);
   const [applicationCounts, setApplicationCounts] = useState({});
   const [loading, setLoading] = useState(true);
@@ -15,25 +15,25 @@ export default function CompaniesPage() {
 
   useEffect(() => {
     async function load() {
-      const [startupSnap, appSnap] = await Promise.all([
-        getDocs(collection(db, 'companies')),
-        getDocs(collection(db, 'applications')),
-      ]);
+      const startupSnap = await getDocs(collection(db, 'companies'));
 
       const startupList = [];
       startupSnap.forEach((doc) => startupList.push({ id: doc.id, ...doc.data() }));
       const counts = {};
-      appSnap.forEach((doc) => {
-        const item = doc.data();
-        counts[item.startupId] = (counts[item.startupId] || 0) + 1;
-      });
+      if (user?.role === 'admin') {
+        const appSnap = await getDocs(collection(db, 'applications'));
+        appSnap.forEach((doc) => {
+          const item = doc.data();
+          counts[item.startupId] = (counts[item.startupId] || 0) + 1;
+        });
+      }
 
       setStartups(startupList);
       setApplicationCounts(counts);
       setLoading(false);
     }
     load();
-  }, []);
+  }, [user]);
 
   if (loading) return <Spinner />;
 

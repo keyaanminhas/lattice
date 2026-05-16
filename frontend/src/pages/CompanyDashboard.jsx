@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { db } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions } from '../firebase';
 import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
 export default function CompanyDashboard({ user }) {
@@ -10,11 +11,12 @@ export default function CompanyDashboard({ user }) {
   const [programmeNames, setProgrammeNames] = useState({});
   const [contributorNames, setContributorNames] = useState({});
   const [loading, setLoading] = useState(true);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     async function load() {
       const [programmeSnap, contributorSnap, appSnap, recSnap, relSnap] = await Promise.all([
-        getDocs(collection(db, 'programmes')),
+        getDocs(query(collection(db, 'programmes'), where('status', 'in', ['Open', 'Active']))),
         getDocs(collection(db, 'contributors')),
         getDocs(query(collection(db, 'applications'), where('startupId', '==', user.id))),
         getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', user.id))),
@@ -44,6 +46,22 @@ export default function CompanyDashboard({ user }) {
     load();
   }, [user.id]);
 
+  async function generateProgrammeRecommendations() {
+    setGenerating(true);
+    try {
+      const recommend = httpsCallable(functions, 'recommend_programmes_for_startup');
+      await recommend({ startupId: user.id });
+      const recSnap = await getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', user.id)));
+      const recList = [];
+      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
+      setRecommendations(recList);
+    } catch (error) {
+      console.error('Programme recommendation failed:', error);
+      alert('Failed to generate programme recommendations for this startup.');
+    }
+    setGenerating(false);
+  }
+
   if (loading) return <Spinner />;
 
   const mentorRecommendations = recommendations.filter((item) => item.recommendationType === 'Startup-to-Mentor');
@@ -52,8 +70,13 @@ export default function CompanyDashboard({ user }) {
   return (
     <div>
       <div className="page-header">
-        <h2>Welcome, {user.name}</h2>
-        <p>Your programme applications, accepted cohorts, and mentor assignments.</p>
+        <div>
+          <h2>Welcome, {user.name}</h2>
+          <p>Your programme applications, accepted cohorts, and mentor assignments.</p>
+        </div>
+        <button className="btn btn-primary" onClick={generateProgrammeRecommendations} disabled={generating}>
+          {generating ? 'Generating...' : 'Find Programmes'}
+        </button>
       </div>
 
       <div className="stat-grid">

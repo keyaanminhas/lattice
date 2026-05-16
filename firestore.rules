@@ -1,18 +1,164 @@
-rules_version='2'
+rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function accountPath() {
+      return /databases/$(database)/documents/accounts/$(request.auth.uid);
+    }
+
+    function hasAccount() {
+      return signedIn() && exists(accountPath());
+    }
+
+    function account() {
+      return get(accountPath()).data;
+    }
+
+    function activeAccount() {
+      return hasAccount()
+        && account().status == 'Active';
+    }
+
+    function isAdmin() {
+      return activeAccount()
+        && account().accountType in ['organisation', 'organisationAdmin', 'platformAdmin'];
+    }
+
+    function isStartup(companyId) {
+      return activeAccount()
+        && account().accountType == 'startup'
+        && account().entityType == 'company'
+        && account().entityId == companyId;
+    }
+
+    function isStartupAccount() {
+      return activeAccount()
+        && account().accountType == 'startup'
+        && account().entityType == 'company';
+    }
+
+    function isContributor(contributorId) {
+      return activeAccount()
+        && account().accountType == 'contributor'
+        && account().entityType == 'contributor'
+        && account().entityId == contributorId;
+    }
+
+    function isContributorAccount() {
+      return activeAccount()
+        && account().accountType == 'contributor'
+        && account().entityType == 'contributor';
+    }
+
+    function accountOwnerUpdateOnly() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['lastLoginAt']);
+    }
+
+    function adminAccountUpdateOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'displayName',
+        'status',
+        'lastLoginAt',
+        'updatedAt'
+      ])
+        && request.resource.data.accountType == resource.data.accountType
+        && request.resource.data.entityType == resource.data.entityType
+        && request.resource.data.entityId == resource.data.entityId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.status in ['Pending', 'Active', 'Suspended', 'Rejected'];
+    }
+
+    function startupProfileUpdateOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'name',
+        'companyName',
+        'sector',
+        'industry',
+        'stage',
+        'country',
+        'teamSize',
+        'problemStatement',
+        'productDescription',
+        'supportNeeds',
+        'traction',
+        'currentChallenges',
+        'updatedAt'
+      ])
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.organisationId == resource.data.organisationId
+        && request.resource.data.verificationStatus == resource.data.verificationStatus;
+    }
+
+    match /accounts/{accountId} {
+      allow get: if (signedIn() && request.auth.uid == accountId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if false;
+      allow update: if (signedIn() && request.auth.uid == accountId && accountOwnerUpdateOnly()) || (isAdmin() && adminAccountUpdateOnly());
+      allow delete: if isAdmin();
+    }
+
+    match /organisations/{organisationId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /programmes/{programmeId} {
+      allow read: if isAdmin() || (activeAccount() && resource.data.status in ['Open', 'Active']);
+      allow write: if isAdmin();
+    }
+
+    match /companies/{companyId} {
+      allow get: if isAdmin() || isStartup(companyId) || isContributorAccount();
+      allow list: if isAdmin() || isContributorAccount();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (isStartup(companyId) && startupProfileUpdateOnly());
+      allow delete: if isAdmin();
+    }
+
+    match /contributors/{contributorId} {
+      allow read: if isAdmin() || isContributor(contributorId) || isStartupAccount();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || isContributor(contributorId);
+      allow delete: if isAdmin();
+    }
+
+    match /applications/{applicationId} {
+      allow read: if isAdmin() || isStartup(resource.data.startupId);
+      allow write: if isAdmin();
+    }
+
+    match /programmeContributors/{assignmentId} {
+      allow read: if isAdmin() || isContributor(resource.data.contributorId) || isStartupAccount();
+      allow write: if isAdmin();
+    }
+
+    match /recommendations/{recommendationId} {
+      allow read: if isAdmin()
+        || isStartup(resource.data.sourceEntityId)
+        || isContributor(resource.data.sourceEntityId)
+        || isContributor(resource.data.targetEntityId);
+      allow write: if isAdmin();
+    }
+
+    match /relationships/{relationshipId} {
+      allow read: if isAdmin()
+        || isStartup(resource.data.sourceEntityId)
+        || isContributor(resource.data.sourceEntityId)
+        || isContributor(resource.data.targetEntityId);
+      allow write: if isAdmin();
+    }
+
+    match /outcomes/{outcomeId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
     match /{document=**} {
-      // This rule allows anyone with your database reference to view, edit,
-      // and delete all data in your database. It is useful for getting
-      // started, but it is configured to expire after 30 days because it
-      // leaves your app open to attackers. At that time, all client
-      // requests to your database will be denied.
-      //
-      // Make sure to write security rules for your app before that time, or
-      // else all client requests to your database will be denied until you
-      // update your rules.
-      allow read, write: if request.time < timestamp.date(2026, 6, 15);
+      allow read, write: if false;
     }
   }
 }

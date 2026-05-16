@@ -1,12 +1,20 @@
 import os
 
 import firebase_admin
-from firebase_admin import firestore
+from firebase_admin import auth, credentials, firestore
+from google.auth.credentials import AnonymousCredentials
 
 os.environ["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8080"
+os.environ["FIREBASE_AUTH_EMULATOR_HOST"] = "127.0.0.1:9099"
+
+
+class EmulatorCredential(credentials.Base):
+    def get_credential(self):
+        return AnonymousCredentials()
+
 
 try:
-    firebase_admin.initialize_app()
+    firebase_admin.initialize_app(EmulatorCredential(), options={"projectId": "lattice-2026"})
 except ValueError:
     pass
 
@@ -16,6 +24,13 @@ db = firestore.client()
 def seed_collection(name: str, records: list[dict]):
     for record in records:
         db.collection(name).document(record["id"]).set(record)
+
+
+def upsert_auth_user(uid: str, email: str, password: str, display_name: str):
+    try:
+        auth.update_user(uid, email=email, password=password, display_name=display_name)
+    except auth.UserNotFoundError:
+        auth.create_user(uid=uid, email=email, password=password, display_name=display_name)
 
 
 def seed_data():
@@ -482,6 +497,55 @@ def seed_data():
     ]
 
     print("Seeding programme-first Lattice demo data...")
+    demo_accounts = [
+        {
+            "uid": "demo-admin",
+            "email": "admin@lattice.demo",
+            "password": "lattice-demo-admin",
+            "displayName": "System Admin",
+            "accountType": "platformAdmin",
+            "entityType": "platform",
+            "entityId": "platform",
+            "status": "Active",
+        },
+        {
+            "uid": "demo-startup-comp-1",
+            "email": "startup@lattice.demo",
+            "password": "lattice-demo-startup",
+            "displayName": "MediScan AI",
+            "accountType": "startup",
+            "entityType": "company",
+            "entityId": "comp-1",
+            "status": "Active",
+        },
+        {
+            "uid": "demo-contributor-cont-1",
+            "email": "contributor@lattice.demo",
+            "password": "lattice-demo-contributor",
+            "displayName": "Dr. Sarah Lim",
+            "accountType": "contributor",
+            "entityType": "contributor",
+            "entityId": "cont-1",
+            "status": "Active",
+        },
+    ]
+
+    for account in demo_accounts:
+        upsert_auth_user(account["uid"], account["email"], account["password"], account["displayName"])
+        db.collection("accounts").document(account["uid"]).set(
+            {
+                "accountType": account["accountType"],
+                "entityType": account["entityType"],
+                "entityId": account["entityId"],
+                "displayName": account["displayName"],
+                "email": account["email"],
+                "status": account["status"],
+                "createdAt": firestore.SERVER_TIMESTAMP,
+                "lastLoginAt": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+
     seed_collection("organisations", organisations)
     seed_collection("programmes", programmes)
     seed_collection("companies", startups)

@@ -5,7 +5,17 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 
-export default function ProgrammeDetailPage() {
+function docsToList(snapshot) {
+  const items = [];
+  snapshot.forEach((doc) => items.push({ id: doc.id, ...doc.data() }));
+  return items;
+}
+
+function uniqueById(items) {
+  return items.filter((item, index, current) => current.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+export default function ProgrammeDetailPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [programme, setProgramme] = useState(null);
@@ -20,33 +30,63 @@ export default function ProgrammeDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const [programmeDoc, startupSnap, contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
-        getDoc(doc(db, 'programmes', id)),
-        getDocs(collection(db, 'companies')),
-        getDocs(collection(db, 'contributors')),
-        getDocs(query(collection(db, 'applications'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id))),
-        getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
-      ]);
-
+      const programmeDoc = await getDoc(doc(db, 'programmes', id));
       if (programmeDoc.exists()) setProgramme({ id: programmeDoc.id, ...programmeDoc.data() });
 
-      const startupMap = {};
-      startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
-      const contributorMap = {};
-      contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+      let appList = [];
+      let poolList = [];
+      let recList = [];
+      let relList = [];
+      let startupMap = {};
+      let contributorMap = {};
+
+      if (user?.role === 'admin') {
+        const [startupSnap, contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
+          getDocs(collection(db, 'companies')),
+          getDocs(collection(db, 'contributors')),
+          getDocs(query(collection(db, 'applications'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'relationships'), where('programmeId', '==', id))),
+        ]);
+        startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
+        contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+        appList = docsToList(appSnap);
+        poolList = docsToList(poolSnap);
+        recList = docsToList(recSnap);
+        relList = docsToList(relSnap);
+      } else if (user?.role === 'company') {
+        const [contributorSnap, appSnap, poolSnap, recSnap, relSnap] = await Promise.all([
+          getDocs(collection(db, 'contributors')),
+          getDocs(query(collection(db, 'applications'), where('startupId', '==', user.id))),
+          getDocs(query(collection(db, 'programmeContributors'), where('programmeId', '==', id))),
+          getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', user.id))),
+        ]);
+        startupMap = { [user.id]: user.name };
+        contributorSnap.forEach((item) => { contributorMap[item.id] = item.data().name; });
+        appList = docsToList(appSnap).filter((item) => item.programmeId === id);
+        poolList = docsToList(poolSnap);
+        recList = docsToList(recSnap).filter((item) => item.programmeId === id);
+        relList = docsToList(relSnap).filter((item) => item.programmeId === id);
+      } else if (user?.role === 'contributor') {
+        const [startupSnap, poolSnap, sourceRecSnap, targetRecSnap, sourceRelSnap, targetRelSnap] = await Promise.all([
+          getDocs(collection(db, 'companies')),
+          getDocs(query(collection(db, 'programmeContributors'), where('contributorId', '==', user.id))),
+          getDocs(query(collection(db, 'recommendations'), where('sourceEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'recommendations'), where('targetEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('sourceEntityId', '==', user.id))),
+          getDocs(query(collection(db, 'relationships'), where('targetEntityId', '==', user.id))),
+        ]);
+        startupSnap.forEach((item) => { startupMap[item.id] = item.data().name; });
+        contributorMap = { [user.id]: user.name };
+        poolList = docsToList(poolSnap).filter((item) => item.programmeId === id);
+        recList = uniqueById([...docsToList(sourceRecSnap), ...docsToList(targetRecSnap)]).filter((item) => item.programmeId === id);
+        relList = uniqueById([...docsToList(sourceRelSnap), ...docsToList(targetRelSnap)]).filter((item) => item.programmeId === id);
+      }
+
       setStartupNames(startupMap);
       setContributorNames(contributorMap);
-
-      const appList = [];
-      appSnap.forEach((item) => appList.push({ id: item.id, ...item.data() }));
-      const poolList = [];
-      poolSnap.forEach((item) => poolList.push({ id: item.id, ...item.data() }));
-      const recList = [];
-      recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
-      const relList = [];
-      relSnap.forEach((item) => relList.push({ id: item.id, ...item.data() }));
 
       setApplications(appList);
       setPoolAssignments(poolList);
@@ -56,7 +96,7 @@ export default function ProgrammeDetailPage() {
     }
 
     load();
-  }, [id]);
+  }, [id, user]);
 
   async function generateMentorRecommendations(startupId) {
     setBusyStartupId(startupId);
@@ -79,6 +119,7 @@ export default function ProgrammeDetailPage() {
 
   const mentorPool = poolAssignments.filter((item) => item.contributorType === 'Mentor');
   const resourcePool = poolAssignments.filter((item) => item.contributorType !== 'Mentor');
+  const canRunAdminActions = user?.role === 'admin';
 
   return (
     <div>
@@ -205,7 +246,7 @@ export default function ProgrammeDetailPage() {
                   <td><ScoreBadge score={item.aiFitScore} /></td>
                   <td><StatusPill status={item.status} /></td>
                   <td>
-                    {item.status === 'Accepted' ? (
+                    {item.status === 'Accepted' && canRunAdminActions ? (
                       <button
                         className="btn btn-sm btn-primary"
                         onClick={() => generateMentorRecommendations(item.startupId)}
