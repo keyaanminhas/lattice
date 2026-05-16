@@ -20,8 +20,8 @@ import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import SettingsPage from './pages/SettingsPage';
 import CreateProgrammePage from './pages/CreateProgrammePage';
 import OutcomesPage from './pages/OutcomesPage';
-import FeatureGuidePage from './pages/FeatureGuidePage';
 import { canAccessRoute } from './config/accessPolicy';
+import BrandLogo from './components/BrandLogo';
 
 const CONTRIBUTOR_ROLES = new Set(['mentor', 'partner', 'investor', 'service_provider', 'contributor']);
 
@@ -77,6 +77,7 @@ function AuthLoadingPanel() {
   return (
     <div className="auth-loading-screen" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: 'var(--color-bg-base)' }}>
       <div className="auth-loading-card" style={{ padding: 40, background: 'var(--color-surface)', borderRadius: 12, border: '1px solid var(--color-border)', textAlign: 'center' }}>
+        <BrandLogo className="auth-loading-brand-logo" />
         <div className="hero-kicker" style={{ color: 'var(--color-primary)', background: 'var(--color-primary-bg)', marginBottom: 16, display: 'inline-block', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600 }}>
           Lattice Access
         </div>
@@ -90,8 +91,39 @@ function AuthLoadingPanel() {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [pendingAuthUser, setPendingAuthUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [authError, setAuthError] = useState('');
+
+  async function resolveAuthenticatedUser(firebaseUser) {
+    try {
+      const { ref: accountRef, snap: accountSnap } = await loadAccountWithRetry(firebaseUser.uid);
+      if (!accountSnap) {
+        setUser(null);
+        setPendingAuthUser({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || '',
+          displayName: firebaseUser.displayName || '',
+          providerIds: (firebaseUser.providerData || []).map((item) => item.providerId).filter(Boolean),
+        });
+        setAuthError('');
+        setAuthReady(true);
+        return;
+      }
+
+      const account = accountSnap.data();
+      setPendingAuthUser(null);
+      setUser(mapAccountToUser(firebaseUser, account));
+      setAuthReady(true);
+      updateDoc(accountRef, { lastLoginAt: serverTimestamp() }).catch(() => {});
+    } catch (error) {
+      console.error('Failed to load account:', error);
+      setPendingAuthUser(null);
+      setUser(null);
+      setAuthError('Could not load the Lattice account for this login.');
+      setAuthReady(true);
+    }
+  }
 
   useEffect(() => {
     let initialResolved = false;
@@ -115,29 +147,12 @@ export default function App() {
       setAuthError('');
       if (!firebaseUser) {
         setUser(null);
+        setPendingAuthUser(null);
         setAuthReady(true);
         return;
       }
 
-      try {
-        const { ref: accountRef, snap: accountSnap } = await loadAccountWithRetry(firebaseUser.uid);
-        if (!accountSnap) {
-          setUser(null);
-          setAuthError('This login exists in Firebase Auth but has no Lattice account mapping yet.');
-          setAuthReady(true);
-          return;
-        }
-
-        const account = accountSnap.data();
-        setUser(mapAccountToUser(firebaseUser, account));
-        setAuthReady(true);
-        updateDoc(accountRef, { lastLoginAt: serverTimestamp() }).catch(() => {});
-      } catch (error) {
-        console.error('Failed to load account:', error);
-        setUser(null);
-        setAuthError('Could not load the Lattice account for this login.');
-        setAuthReady(true);
-      }
+      await resolveAuthenticatedUser(firebaseUser);
     });
 
     if (usingEmulators) {
@@ -154,7 +169,7 @@ export default function App() {
   }, []);
 
   if (!authReady) return <AuthLoadingPanel />;
-  if (!user) return <LoginPage authError={authError} />;
+  if (!user) return <LoginPage authError={authError} pendingAuthUser={pendingAuthUser} onRegistrationCompleted={() => resolveAuthenticatedUser(auth.currentUser)} />;
   if (user.status !== 'Active') return <PendingAccountPage user={user} onLogout={() => signOut(auth)} />;
 
   const isStartup = user.roleKey === 'startup';
@@ -197,7 +212,6 @@ export default function App() {
               {canAccessRoute(user.roleKey, '/contributors') ? <Route path="/contributors" element={<ContributorsPage />} /> : null}
               {canAccessRoute(user.roleKey, '/programmes') ? <Route path="/programmes" element={<ProgrammesPage user={user} />} /> : null}
               {canAccessRoute(user.roleKey, '/programmes') ? <Route path="/programmes/:id" element={<ProgrammeDetailPage user={user} />} /> : null}
-              {canAccessRoute(user.roleKey, '/feature-guide') ? <Route path="/feature-guide" element={<FeatureGuidePage user={user} />} /> : null}
               <Route path="/privacy" element={<PrivacyPolicyPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="190" viewBox="0 0 720 190" fill="none">
+  <defs>
+    <linearGradient id="latticeBlue" x1="32" y1="26" x2="666" y2="168" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F2A8B"/>
+      <stop offset="0.48" stop-color="#124AC8"/>
+      <stop offset="1" stop-color="#1E6CFF"/>
+    </linearGradient>
+    <linearGradient id="latticeBlueLight" x1="34" y1="26" x2="142" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1F6BFF"/>
+      <stop offset="1" stop-color="#0A44D9"/>
+    </linearGradient>
+  </defs>
+  <path d="M52 28H94C119.405 28 140 48.5949 140 74V157C140 162.523 135.523 167 130 167H88C57.0721 167 32 141.928 32 111V48C32 36.9543 40.9543 28 52 28Z" fill="url(#latticeBlueLight)"/>
+  <path d="M32 28H52C77.4051 28 98 48.5949 98 74V127C98 132.523 93.5228 137 88 137H84C55.2812 137 32 113.719 32 85V28Z" fill="#0B1B67"/>
+  <path d="M82 148H662C680.778 148 696 163.222 696 182H116C97.2223 182 82 166.778 82 148Z" fill="url(#latticeBlue)"/>
+  <text x="128" y="138" fill="url(#latticeBlue)" font-family="Inter, Avenir Next, Segoe UI, Arial, sans-serif" font-size="116" font-weight="400" letter-spacing="0">attice</text>
+</svg>

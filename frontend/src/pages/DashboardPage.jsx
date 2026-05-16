@@ -3,7 +3,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { functions } from '../firebase';
 import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
-import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
+import { RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
 import { canAccessRoute, canPerformAction } from '../config/accessPolicy';
 import { trackRoleFeatureEvent } from '../services/telemetry';
@@ -99,10 +99,7 @@ export default function DashboardPage({ user }) {
   return (
     <div>
       {featureFlags.roleFeatureVisibilityV1 ? (
-        <>
-          <RoleAccessBanner roleKey={user?.roleKey || 'organisation_admin'} scopeLabel="Organisation / Programme scope" />
-          <FeatureVisibilityPanel roleKey={user?.roleKey || 'organisation_admin'} surfacePath="/" />
-        </>
+        <RoleAccessBanner roleKey={user?.roleKey || 'organisation_admin'} scopeLabel="Organisation / Programme scope" />
       ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>

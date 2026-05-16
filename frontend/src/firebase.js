@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
-import { getAuth, connectAuthEmulator } from 'firebase/auth';
+import { getAuth, connectAuthEmulator, GoogleAuthProvider } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyDkpYdiPm9uwVGPnXTDqIjkyrFLj0GOgfI',
@@ -16,6 +16,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const functions = getFunctions(app, 'us-central1');
 const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 const useEmulators = import.meta.env.VITE_USE_FIREBASE_EMULATORS === 'true';
 
 if (useEmulators) {
@@ -24,4 +25,4 @@ if (useEmulators) {
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
 }
 
-export { db, functions, auth, useEmulators as usingEmulators };
+export { db, functions, auth, googleProvider, useEmulators as usingEmulators };

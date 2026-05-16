@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { getSidebarItems } from '../config/accessPolicy';
+import BrandLogo from './BrandLogo';
 
 function roleLabel(roleKey) {
   const map = {
@@ -34,9 +35,8 @@ export default function Sidebar({ user, onLogout }) {
   return (
     <aside className="app-sidebar">
       <div className="sidebar-brand">
-        <div className="sidebar-brand-icon">L</div>
         <div>
-          <h1>Lattice</h1>
+          <BrandLogo className="sidebar-brand-logo" />
           <p>Ecosystem Platform</p>
         </div>
       </div>

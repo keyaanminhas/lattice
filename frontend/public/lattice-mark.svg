@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
   <defs>
-    <linearGradient id="faviconBlue" x1="18" y1="16" x2="112" y2="112" gradientUnits="userSpaceOnUse">
+    <linearGradient id="markBlue" x1="18" y1="16" x2="112" y2="112" gradientUnits="userSpaceOnUse">
       <stop stop-color="#1F6BFF"/>
       <stop offset="1" stop-color="#0A44D9"/>
     </linearGradient>
   </defs>
-  <path d="M34 16H64C86.0914 16 104 33.9086 104 56V102C104 107.523 99.5228 112 94 112H64C38.5949 112 18 91.4051 18 66V32C18 23.1634 25.1634 16 34 16Z" fill="url(#faviconBlue)"/>
+  <path d="M34 16H64C86.0914 16 104 33.9086 104 56V102C104 107.523 99.5228 112 94 112H64C38.5949 112 18 91.4051 18 66V32C18 23.1634 25.1634 16 34 16Z" fill="url(#markBlue)"/>
   <path d="M18 16H34C56.0914 16 74 33.9086 74 56V82C74 87.5228 69.5228 92 64 92C38.5949 92 18 71.4051 18 46V16Z" fill="#0B1B67"/>
   <path d="M58 94H112C112 104.493 103.493 113 93 113H77C66.5066 113 58 104.493 58 94Z" fill="#0B1B67"/>
 </svg>

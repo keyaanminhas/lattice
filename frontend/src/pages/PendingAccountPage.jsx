@@ -1,4 +1,5 @@
 import { StatusPill } from '../components/Shared';
+import BrandLogo from '../components/BrandLogo';
 
 function entityLabel(user) {
   if (user.roleKey) return user.roleKey.replaceAll('_', ' ');
@@ -14,6 +15,7 @@ export default function PendingAccountPage({ user, onLogout }) {
   return (
     <div className="pending-account-screen">
       <section className="pending-account-card">
+        <BrandLogo className="pending-account-brand-logo" />
         <div className="hero-kicker" style={{ color: 'var(--color-primary)', background: 'var(--color-primary-bg)', marginBottom: 16 }}>
           Lattice Access
         </div>

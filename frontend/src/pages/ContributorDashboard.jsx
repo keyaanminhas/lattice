@@ -4,7 +4,7 @@ import { httpsCallable } from 'firebase/functions';
 import { useSearchParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
-import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
+import { RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
 import { getDashboardTabs } from '../config/accessPolicy';
 
@@ -91,10 +91,7 @@ export default function ContributorDashboard({ user }) {
   return (
     <div>
       {featureFlags.roleFeatureVisibilityV1 ? (
-        <>
-          <RoleAccessBanner roleKey={user?.roleKey || 'mentor'} scopeLabel="Self + assigned programme scope" />
-          <FeatureVisibilityPanel roleKey={user?.roleKey || 'mentor'} surfacePath="/" />
-        </>
+        <RoleAccessBanner roleKey={user?.roleKey || 'mentor'} scopeLabel="Self + assigned programme scope" />
       ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>

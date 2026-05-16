@@ -1,14 +1,14 @@
 const ROUTE_ACCESS = {
-  platform_admin: new Set(['/','/companies','/contributors','/programmes','/settings','/feature-guide','/privacy']),
-  organisation_admin: new Set(['/','/companies','/contributors','/programmes','/programmes/create','/insights','/feature-guide','/privacy']),
-  programme_admin: new Set(['/','/companies','/contributors','/programmes','/matches','/outcomes','/feature-guide','/privacy']),
-  startup: new Set(['/','/programmes','/companies','/contributors','/feature-guide','/privacy']),
-  mentor: new Set(['/','/programmes','/companies','/feature-guide','/privacy']),
-  partner: new Set(['/','/programmes','/companies','/feature-guide','/privacy']),
-  investor: new Set(['/','/programmes','/companies','/feature-guide','/privacy']),
-  service_provider: new Set(['/','/programmes','/companies','/feature-guide','/privacy']),
-  admin: new Set(['/','/companies','/contributors','/programmes','/settings','/feature-guide','/privacy']),
-  contributor: new Set(['/','/programmes','/companies','/feature-guide','/privacy']),
+  platform_admin: new Set(['/','/companies','/contributors','/programmes','/settings','/privacy']),
+  organisation_admin: new Set(['/','/companies','/contributors','/programmes','/programmes/create','/insights','/privacy']),
+  programme_admin: new Set(['/','/companies','/contributors','/programmes','/matches','/outcomes','/privacy']),
+  startup: new Set(['/','/programmes','/companies','/contributors','/privacy']),
+  mentor: new Set(['/','/programmes','/companies','/privacy']),
+  partner: new Set(['/','/programmes','/companies','/privacy']),
+  investor: new Set(['/','/programmes','/companies','/privacy']),
+  service_provider: new Set(['/','/programmes','/companies','/privacy']),
+  admin: new Set(['/','/companies','/contributors','/programmes','/settings','/privacy']),
+  contributor: new Set(['/','/programmes','/companies','/privacy']),
 };
 
 const ACTION_ACCESS = {
@@ -80,17 +80,11 @@ export function getSidebarItems(roleKey) {
   const role = normaliseRole(roleKey);
   if (role === 'startup') {
     const tabs = getDashboardTabs('startup');
-    return [
-      ...tabs.map((tab) => ({ to: `/?tab=${tab.id}`, icon: tab.icon, label: tab.label })),
-      { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
-    ];
+    return tabs.map((tab) => ({ to: `/?tab=${tab.id}`, icon: tab.icon, label: tab.label }));
   }
   if (role === 'contributor') {
     const tabs = getDashboardTabs('contributor');
-    return [
-      ...tabs.map((tab) => ({ to: `/?tab=${tab.id}`, icon: tab.icon, label: tab.label })),
-      { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
-    ];
+    return tabs.map((tab) => ({ to: `/?tab=${tab.id}`, icon: tab.icon, label: tab.label }));
   }
 
   const items = [
@@ -103,7 +97,6 @@ export function getSidebarItems(roleKey) {
     { to: '/insights', icon: 'insights', label: 'Insights' },
     { to: '/settings', icon: 'settings', label: 'Settings' },
     { to: '/programmes/create', icon: 'add_circle', label: 'Create Programme' },
-    { to: '/feature-guide', icon: 'menu_book', label: 'Feature Guide', capabilityTag: 'Guide' },
   ];
   return items.filter((item) => canAccessRoute(role, item.to));
 }

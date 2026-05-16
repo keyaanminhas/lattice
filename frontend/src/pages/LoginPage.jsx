@@ -1,7 +1,16 @@
-import { useState } from 'react';
-import { createUserWithEmailAndPassword, deleteUser, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { useEffect, useState } from 'react';
+import {
+  createUserWithEmailAndPassword,
+  deleteUser,
+  fetchSignInMethodsForEmail,
+  GoogleAuthProvider,
+  linkWithCredential,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
 import { httpsCallable } from 'firebase/functions';
-import { auth, functions, usingEmulators } from '../firebase';
+import { auth, functions, googleProvider, usingEmulators } from '../firebase';
 import {
   SECTOR_OPTIONS,
   STAGE_OPTIONS,
@@ -47,6 +56,11 @@ function formatAuthError(error) {
     : 'Could not reach live Firebase Functions. Check the deployed backend and network connection.';
   if (error?.code === 'functions/failed-precondition') return error.message || 'This login already has a Lattice account.';
   if (error?.code === 'functions/invalid-argument') return error.message || 'Some registration details are missing or invalid.';
+  if (error?.code === 'auth/popup-closed-by-user') return 'Google sign-in was cancelled before completion.';
+  if (error?.code === 'auth/popup-blocked') return 'Google sign-in popup was blocked by the browser.';
+  if (error?.code === 'auth/cancelled-popup-request') return 'Google sign-in was interrupted by another popup request.';
+  if (error?.code === 'auth/account-exists-with-different-credential') return 'This email already exists with another sign-in method. Sign in with your password once to link Google.';
+  if (error?.code === 'auth/credential-already-in-use') return 'That Google account is already linked to another login.';
   return error?.message || 'Authentication failed.';
 }
 
@@ -162,11 +176,14 @@ function requestedRoleKeyForRegistration(reg) {
   return '';
 }
 
-function validateRegistrationStep(reg, step) {
+function validateRegistrationStep(reg, step, options = {}) {
+  const requiresPassword = options.requiresPassword !== false;
   if (step === 0) {
     if (!hasText(reg.email)) return 'Email is required.';
-    if (!hasText(reg.password)) return 'Password is required.';
-    if (reg.password.length < 6) return 'Password must be at least 6 characters.';
+    if (requiresPassword) {
+      if (!hasText(reg.password)) return 'Password is required.';
+      if (reg.password.length < 6) return 'Password must be at least 6 characters.';
+    }
     return '';
   }
 
@@ -218,34 +235,86 @@ function validateRegistrationStep(reg, step) {
   return '';
 }
 
-function validateRegistration(reg) {
+function validateRegistration(reg, options = {}) {
   for (let currentStep = 0; currentStep < STEP_LABELS[reg.accountType].length - 1; currentStep += 1) {
-    const currentError = validateRegistrationStep(reg, currentStep);
+    const currentError = validateRegistrationStep(reg, currentStep, options);
     if (currentError) return currentError;
   }
   return '';
 }
 
-export default function LoginPage({ authError }) {
+function GoogleMark() {
+  return (
+    <svg aria-hidden="true" className="auth-google-icon" viewBox="0 0 24 24">
+      <path
+        d="M21.805 12.23c0-.68-.061-1.334-.174-1.963H12v3.713h5.498a4.705 4.705 0 0 1-2.04 3.086v2.565h3.296c1.93-1.776 3.05-4.394 3.05-7.401Z"
+        fill="#4285F4"
+      />
+      <path
+        d="M12 22.2c2.76 0 5.076-.914 6.768-2.47l-3.296-2.565c-.914.614-2.083.977-3.472.977-2.667 0-4.925-1.8-5.732-4.22H2.86v2.645A10.2 10.2 0 0 0 12 22.2Z"
+        fill="#34A853"
+      />
+      <path
+        d="M6.268 13.922A6.127 6.127 0 0 1 5.948 12c0-.667.115-1.315.32-1.922V7.433H2.86A10.2 10.2 0 0 0 1.8 12c0 1.647.394 3.207 1.06 4.567l3.408-2.645Z"
+        fill="#FBBC05"
+      />
+      <path
+        d="M12 5.858c1.502 0 2.852.516 3.914 1.528l2.937-2.937C17.072 2.79 14.756 1.8 12 1.8a10.2 10.2 0 0 0-9.14 5.633l3.408 2.645C7.075 7.658 9.333 5.858 12 5.858Z"
+        fill="#EA4335"
+      />
+    </svg>
+  );
+}
+
+function defaultContributorName(pendingAuthUser) {
+  return typeof pendingAuthUser?.displayName === 'string' ? pendingAuthUser.displayName.trim() : '';
+}
+
+export default function LoginPage({ authError, pendingAuthUser, onRegistrationCompleted }) {
   const [mode, setMode] = useState('signin');
   const [step, setStep] = useState(0);
   const [signInForm, setSignInForm] = useState({ email: '', password: '' });
   const [reg, setReg] = useState(initialRegistration);
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState('');
   const [error, setError] = useState('');
+  const [linkState, setLinkState] = useState({ email: '', password: '', methods: [], credential: null });
+
+  const isGoogleRegistration = Boolean(pendingAuthUser?.uid);
+  const requiresPassword = !isGoogleRegistration;
 
   const up = (field, value) => setReg((current) => ({ ...current, [field]: value }));
   const steps = STEP_LABELS[reg.accountType];
   const maxStep = steps.length - 1;
 
+  useEffect(() => {
+    if (!pendingAuthUser) return;
+    setMode('register');
+    setStep(0);
+    setError('');
+    setReg((current) => ({
+      ...current,
+      email: pendingAuthUser.email || current.email,
+      password: '',
+      contributorName: current.contributorName || defaultContributorName(pendingAuthUser),
+    }));
+  }, [pendingAuthUser]);
+
   function switchMode(nextMode) {
+    if (isGoogleRegistration && nextMode === 'signin') return;
     setMode(nextMode);
     setError('');
     setStep(0);
   }
 
   function switchEntity(type) {
-    setReg({ ...initialRegistration, accountType: type });
+    setReg({
+      ...initialRegistration,
+      accountType: type,
+      email: isGoogleRegistration ? pendingAuthUser.email || '' : '',
+      password: '',
+      contributorName: isGoogleRegistration && type === 'contributor' ? defaultContributorName(pendingAuthUser) : '',
+    });
     setStep(0);
     setError('');
   }
@@ -253,43 +322,112 @@ export default function LoginPage({ authError }) {
   async function handleSignIn(e) {
     e.preventDefault();
     setBusy(true);
+    setBusyAction('signin');
     setError('');
     try {
       await signInWithEmailAndPassword(auth, signInForm.email.trim(), signInForm.password);
     } catch (err) {
       setError(formatAuthError(err));
     }
+    setBusyAction('');
     setBusy(false);
   }
 
   async function handleDemoSignIn(account) {
     setBusy(true);
+    setBusyAction('demo');
     setError('');
     try {
       await signInWithEmailAndPassword(auth, account.email, account.password);
     } catch (err) {
       setError(`${formatAuthError(err)} Run python seed_db.py after starting the Firebase emulators to create demo logins.`);
     }
+    setBusyAction('');
+    setBusy(false);
+  }
+
+  async function handleGoogleSignIn() {
+    if (usingEmulators) {
+      setError('Google sign-in is not available against the local Auth emulator. Use the hosted Firebase environment for Google auth.');
+      return;
+    }
+
+    setBusy(true);
+    setBusyAction('google');
+    setError('');
+    setLinkState({ email: '', password: '', methods: [], credential: null });
+
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      if (err?.code === 'auth/account-exists-with-different-credential') {
+        const credential = GoogleAuthProvider.credentialFromError(err);
+        const email = err?.customData?.email || '';
+        const methods = email ? await fetchSignInMethodsForEmail(auth, email) : [];
+        if (methods.includes('password') && credential) {
+          setLinkState({
+            email,
+            password: '',
+            methods,
+            credential,
+          });
+          setError('This email already uses password sign-in. Enter that password once to link Google to the same account.');
+        } else {
+          setError('This email already exists with another sign-in method. Sign in with that method first, then link Google later.');
+        }
+      } else {
+        setError(formatAuthError(err));
+      }
+    }
+
+    setBusyAction('');
+    setBusy(false);
+  }
+
+  async function handleGoogleLink() {
+    if (!linkState.email || !linkState.password || !linkState.credential) {
+      setError('Email, password, and Google credential are required to complete linking.');
+      return;
+    }
+
+    setBusy(true);
+    setBusyAction('link');
+    setError('');
+
+    try {
+      const linkedUser = await signInWithEmailAndPassword(auth, linkState.email.trim(), linkState.password);
+      await linkWithCredential(linkedUser.user, linkState.credential);
+      setLinkState({ email: '', password: '', methods: [], credential: null });
+    } catch (err) {
+      setError(formatAuthError(err));
+    }
+
+    setBusyAction('');
     setBusy(false);
   }
 
   async function handleRegistration(e) {
     e.preventDefault();
-    const registrationError = validateRegistration(reg);
+    const registrationError = validateRegistration(reg, { requiresPassword });
     if (registrationError) {
       setError(registrationError);
       return;
     }
 
     setBusy(true);
+    setBusyAction('register');
     setError('');
 
     let createdUser = null;
     let done = false;
 
     try {
-      const cred = await createUserWithEmailAndPassword(auth, reg.email.trim(), reg.password);
-      createdUser = cred.user;
+      if (isGoogleRegistration) {
+        createdUser = auth.currentUser;
+      } else {
+        const cred = await createUserWithEmailAndPassword(auth, reg.email.trim(), reg.password);
+        createdUser = cred.user;
+      }
       const fn = httpsCallable(functions, 'complete_entity_registration');
       await fn({
         accountType: reg.accountType,
@@ -297,22 +435,27 @@ export default function LoginPage({ authError }) {
         profile: buildRegistrationProfile(reg),
       });
       done = true;
-      await signOut(auth);
-      await signInWithEmailAndPassword(auth, reg.email.trim(), reg.password);
+      if (isGoogleRegistration) {
+        await onRegistrationCompleted?.();
+      } else {
+        await signOut(auth);
+        await signInWithEmailAndPassword(auth, reg.email.trim(), reg.password);
+      }
       setReg(initialRegistration);
       setStep(0);
     } catch (err) {
-      if (createdUser && !done) {
+      if (createdUser && !done && !isGoogleRegistration) {
         await deleteUser(createdUser).catch(() => signOut(auth).catch(() => {}));
       }
       setError(formatAuthError(err));
     }
 
+    setBusyAction('');
     setBusy(false);
   }
 
   function goNext() {
-    const stepError = validateRegistrationStep(reg, step);
+    const stepError = validateRegistrationStep(reg, step, { requiresPassword });
     if (stepError) {
       setError(stepError);
       return;
@@ -332,9 +475,28 @@ export default function LoginPage({ authError }) {
       ? 'Create contributor account'
       : 'Create organisation account';
 
+  function renderGoogleAction(label) {
+    const googleBusyLabel = busyAction === 'google' ? 'Loading Google account...' : label;
+    return (
+      <button className="auth-google-button" disabled={busy} onClick={handleGoogleSignIn} type="button">
+        <GoogleMark />
+        <span>{busy ? googleBusyLabel : label}</span>
+      </button>
+    );
+  }
+
   function renderAccountStep() {
     return (
       <>
+        {isGoogleRegistration ? (
+          <div className="auth-provider-note">
+            <div>
+              <strong>Google account connected</strong>
+              <span>{pendingAuthUser.email}</span>
+            </div>
+            <button className="btn btn-outline" onClick={() => signOut(auth)} type="button">Use different account</button>
+          </div>
+        ) : null}
         <div className="entity-choice-grid" aria-label="Choose account type">
           {[
             { value: 'startup', label: 'Startup', detail: 'Company profile seeking programme support' },
@@ -353,8 +515,8 @@ export default function LoginPage({ authError }) {
           ))}
         </div>
         <div className="auth-form-grid">
-          <label>Email<input type="email" value={reg.email} onChange={(e) => up('email', e.target.value)} required /></label>
-          <label>Password<input type="password" value={reg.password} onChange={(e) => up('password', e.target.value)} required minLength={6} /></label>
+          <label>Email<input type="email" value={reg.email} onChange={(e) => up('email', e.target.value)} required readOnly={isGoogleRegistration} /></label>
+          {requiresPassword ? <label>Password<input type="password" value={reg.password} onChange={(e) => up('password', e.target.value)} required minLength={6} /></label> : null}
         </div>
       </>
     );
@@ -593,7 +755,17 @@ export default function LoginPage({ authError }) {
             <form className="auth-form" onSubmit={handleSignIn}>
               <label>Email<input type="email" value={signInForm.email} onChange={(e) => setSignInForm({ ...signInForm, email: e.target.value })} required /></label>
               <label>Password<input type="password" value={signInForm.password} onChange={(e) => setSignInForm({ ...signInForm, password: e.target.value })} required /></label>
-              <button className="btn btn-primary auth-submit" disabled={busy} type="submit">{busy ? 'Signing in...' : 'Sign in'}</button>
+              <button className="btn btn-primary auth-submit" disabled={busy} type="submit">{busy && busyAction === 'signin' ? 'Signing in...' : 'Sign in'}</button>
+              {renderGoogleAction('Continue with Google')}
+              {linkState.credential ? (
+                <div className="auth-link-form">
+                  <div className="auth-link-copy">
+                    Link Google to <strong>{linkState.email}</strong>.
+                  </div>
+                  <label>Password<input type="password" value={linkState.password} onChange={(e) => setLinkState((current) => ({ ...current, password: e.target.value }))} required /></label>
+                  <button className="btn btn-outline auth-submit" disabled={busy} onClick={handleGoogleLink} type="button">{busy && busyAction === 'link' ? 'Linking...' : 'Link Google and continue'}</button>
+                </div>
+              ) : null}
               {usingEmulators ? (
                 <div className="demo-login-group">
                   {demoAccounts.map((account) => (
@@ -607,6 +779,7 @@ export default function LoginPage({ authError }) {
             <form className="auth-form" onSubmit={handleRegistration}>
               <WizardProgress steps={steps} current={step} />
               {renderStepContent()}
+              {!isGoogleRegistration && step === 0 ? renderGoogleAction('Create account with Google') : null}
               <WizardNav step={step} maxStep={maxStep} onBack={goBack} onContinue={goNext} busy={busy} submitLabel={submitLabel} />
             </form>
           )}
