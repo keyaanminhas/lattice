@@ -1895,17 +1895,17 @@ def build_seed_data():
                 )
             )
 
-    for programme in programmes:
+    for programme_item in programmes:
         role_assignments.append(
             role_assignment(
-                f"ra-programme-slot-{programme['id']}",
+                f"ra-programme-slot-{programme_item['id']}",
                 None,
                 "programme_admin",
                 "programme",
-                programme["id"],
+                programme_item["id"],
                 status="unassigned",
-                organisation_id=programme["organisationId"],
-                programme_id=programme["id"],
+                organisation_id=programme_item["organisationId"],
+                programme_id=programme_item["id"],
             )
         )
 
