@@ -256,9 +256,25 @@ def build_targets(organisations: list[dict], companies: list[dict], contributors
 
 
 def write_account_document(uid: str, target: dict):
+    role_key = "startup"
+    if target["accountType"] == "organisation":
+        role_key = "organisation_admin"
+    elif target["accountType"] == "contributor":
+        contributor_types = [item.lower() for item in (target.get("contributorTypes") or [])]
+        if "mentor" in contributor_types:
+            role_key = "mentor"
+        elif "investor" in contributor_types:
+            role_key = "investor"
+        elif "service provider" in contributor_types or "technical provider" in contributor_types:
+            role_key = "service_provider"
+        else:
+            role_key = "partner"
+
     account_data = {
         "id": uid,
         "accountType": target["accountType"],
+        "roleKey": role_key,
+        "requestedRoleKey": role_key,
         "entityType": target["entityType"],
         "entityId": target["entityId"],
         "displayName": target["displayName"],

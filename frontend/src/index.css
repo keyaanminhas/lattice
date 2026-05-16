@@ -225,6 +225,18 @@ html, body, #root {
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 
+.nav-capability-tag {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #0b317c;
+  background: #e6f0ff;
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
 .sidebar-user {
   margin-top: auto;
   padding: 12px;
@@ -261,6 +273,85 @@ html, body, #root {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.role-access-banner {
+  border: 1px solid #c3c6d7;
+  background: linear-gradient(135deg, #f6f9ff 0%, #eef4ff 100%);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.role-access-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0b317c;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.role-access-body {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feature-visibility-panel {
+  margin-bottom: 16px;
+  border: 1px solid #bfc6dd;
+}
+
+.feature-visibility-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.feature-visibility-head h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0b317c;
+}
+
+.feature-visibility-head p {
+  font-size: 12px;
+  color: #434655;
+}
+
+.feature-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.feature-capability-card {
+  border: 1px solid #dde3f5;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.feature-capability-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #191c1e;
+  margin-bottom: 8px;
+}
+
+.feature-capability-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.feature-locked-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #5a5e73;
 }
 
 .sidebar-user-info .role {

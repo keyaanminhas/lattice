@@ -27,6 +27,7 @@ else:
     SERVER_TIMESTAMP = admin_firestore.SERVER_TIMESTAMP
 
 MANAGED_COLLECTIONS = [
+    "roleAssignments",
     "accounts",
     "graph_edges",
     "outcomes",
@@ -49,6 +50,7 @@ DEMO_LOGINS = [
         "account_type": "organisation",
         "entity_type": "organisation",
         "entity_id": "org-1",
+        "role_key": "organisation_admin",
         "status": "Active",
     },
     {
@@ -59,6 +61,7 @@ DEMO_LOGINS = [
         "account_type": "startup",
         "entity_type": "company",
         "entity_id": "comp-1",
+        "role_key": "startup",
         "status": "Active",
     },
     {
@@ -69,6 +72,7 @@ DEMO_LOGINS = [
         "account_type": "contributor",
         "entity_type": "contributor",
         "entity_id": "cont-1",
+        "role_key": "mentor",
         "status": "Active",
     },
 ]
@@ -103,16 +107,60 @@ def seed_collection(name: str, records: list[dict]):
         db.collection(name).document(record["id"]).set(record)
 
 
-def account(uid: str, email: str, display_name: str, account_type: str, entity_type: str, entity_id: str, status: str):
+def account(
+    uid: str,
+    email: str,
+    display_name: str,
+    account_type: str,
+    entity_type: str,
+    entity_id: str,
+    status: str,
+    role_key: str | None = None,
+):
+    if not role_key:
+        if account_type == "organisation":
+            role_key = "organisation_admin"
+        elif account_type == "startup":
+            role_key = "startup"
+        else:
+            role_key = "mentor"
     return _with_created_updated(
         {
             "id": uid,
             "accountType": account_type,
+            "roleKey": role_key,
             "entityType": entity_type,
             "entityId": entity_id,
             "displayName": display_name,
             "email": email,
             "status": status,
+        }
+    )
+
+
+def role_assignment(
+    assignment_id: str,
+    uid: str | None,
+    role_key: str,
+    scope_type: str,
+    scope_id: str,
+    status: str = "active",
+    organisation_id: str | None = None,
+    programme_id: str | None = None,
+):
+    return _with_created_updated(
+        {
+            "id": assignment_id,
+            "uid": uid,
+            "roleKey": role_key,
+            "scopeType": scope_type,
+            "scopeId": scope_id,
+            "status": status,
+            "organisationId": organisation_id,
+            "programmeId": programme_id,
+            "isSeeded": True,
+            "createdByUid": "seed_db",
+            "approvedByUid": "seed_db",
         }
     )
 
@@ -1802,11 +1850,67 @@ def build_seed_data():
             login["entity_type"],
             login["entity_id"],
             login["status"],
+            login.get("role_key"),
         )
         for login in DEMO_LOGINS
     ]
 
+    role_assignments = []
+    for account_item in accounts:
+        role_key = account_item["roleKey"]
+        uid = account_item["id"]
+        entity_id = account_item["entityId"]
+        if role_key == "organisation_admin":
+            role_assignments.append(
+                role_assignment(
+                    f"ra-org-{uid}",
+                    uid,
+                    "organisation_admin",
+                    "organisation",
+                    entity_id,
+                    status="active",
+                    organisation_id=entity_id,
+                )
+            )
+        elif role_key == "startup":
+            role_assignments.append(
+                role_assignment(
+                    f"ra-startup-{uid}",
+                    uid,
+                    "startup",
+                    "self",
+                    entity_id,
+                    status="active",
+                )
+            )
+        else:
+            role_assignments.append(
+                role_assignment(
+                    f"ra-contributor-{uid}",
+                    uid,
+                    role_key,
+                    "self",
+                    entity_id,
+                    status="active",
+                )
+            )
+
+    for programme in programmes:
+        role_assignments.append(
+            role_assignment(
+                f"ra-programme-slot-{programme['id']}",
+                None,
+                "programme_admin",
+                "programme",
+                programme["id"],
+                status="unassigned",
+                organisation_id=programme["organisationId"],
+                programme_id=programme["id"],
+            )
+        )
+
     return {
+        "roleAssignments": role_assignments,
         "accounts": accounts,
         "organisations": organisations,
         "programmes": programmes,

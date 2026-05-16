@@ -3,6 +3,8 @@ import { collection, doc, getDoc, getDocs, query, where, updateDoc } from 'fireb
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Badge, ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
+import { featureFlags } from '../config/featureFlags';
 
 export default function ContributorDashboard({ user }) {
   const [contributor, setContributor] = useState(null);
@@ -67,6 +69,12 @@ export default function ContributorDashboard({ user }) {
 
   return (
     <div>
+      {featureFlags.roleFeatureVisibilityV1 ? (
+        <>
+          <RoleAccessBanner roleKey={user?.roleKey || 'mentor'} scopeLabel="Self + assigned programme scope" />
+          <FeatureVisibilityPanel roleKey={user?.roleKey || 'mentor'} surfacePath="/" />
+        </>
+      ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 className="page-title">{contributor?.name || user.name}</h2>

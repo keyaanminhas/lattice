@@ -4,8 +4,10 @@ import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
+import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
+import { featureFlags } from '../config/featureFlags';
 
-export default function DashboardPage() {
+export default function DashboardPage({ user }) {
   const [stats, setStats] = useState(null);
   const [recentRecommendations, setRecentRecommendations] = useState([]);
   const [startups, setStartups] = useState({});
@@ -54,6 +56,12 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {featureFlags.roleFeatureVisibilityV1 ? (
+        <>
+          <RoleAccessBanner roleKey={user?.roleKey || 'organisation_admin'} scopeLabel="Organisation / Programme scope" />
+          <FeatureVisibilityPanel roleKey={user?.roleKey || 'organisation_admin'} surfacePath="/" />
+        </>
+      ) : null}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 className="page-title">Dashboard</h2>

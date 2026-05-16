@@ -4,8 +4,10 @@ import { httpsCallable } from 'firebase/functions';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db, functions } from '../firebase';
 import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
+import { RoleAccessBanner } from '../components/FeatureVisibility';
+import { trackRoleFeatureEvent } from '../services/telemetry';
 
-export default function ProgrammeDetailPage() {
+export default function ProgrammeDetailPage({ user }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const [programme, setProgramme] = useState(null);
@@ -57,6 +59,7 @@ export default function ProgrammeDetailPage() {
       setRelationships(relList);
       setGraphView(graphResult.data);
       setLoading(false);
+      trackRoleFeatureEvent('programme_page_loaded', { programmeId: id });
     }
 
     load();
@@ -67,12 +70,14 @@ export default function ProgrammeDetailPage() {
     try {
       const recommend = httpsCallable(functions, 'recommend_mentor_for_startup');
       await recommend({ startupId, programmeId: id });
+      trackRoleFeatureEvent('mentor_recommendation_generated', { programmeId: id, startupId });
       const recSnap = await getDocs(query(collection(db, 'recommendations'), where('programmeId', '==', id)));
       const recList = [];
       recSnap.forEach((item) => recList.push({ id: item.id, ...item.data() }));
       setRecommendations(recList);
     } catch (error) {
       console.error('Failed to generate mentor recommendations:', error);
+      trackRoleFeatureEvent('permission_attempt_failed', { action: 'recommend_mentor_for_startup', programmeId: id, startupId });
       alert('Failed to generate mentor recommendations. Check the function logs.');
     }
     setBusyStartupId('');
@@ -86,6 +91,7 @@ export default function ProgrammeDetailPage() {
 
   return (
     <div>
+      <RoleAccessBanner roleKey={user?.roleKey || 'programme_admin'} scopeLabel={`Programme scope: ${id}`} />
       <div className="hero-panel">
         <div className="hero-kicker">Programme Operations</div>
         <div className="hero-title-row">

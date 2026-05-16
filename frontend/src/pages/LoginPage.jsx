@@ -78,6 +78,16 @@ function hasItems(value) {
   return Array.isArray(value) && value.length > 0;
 }
 
+function requestedRoleKeyForRegistration(reg) {
+  if (reg.accountType === 'startup') return 'startup';
+  if (reg.accountType === 'organisation') return 'organisation_admin';
+  const mapped = CONTRIBUTOR_TYPE_MAP[reg.contributorType] || 'Mentor';
+  if (mapped === 'Mentor') return 'mentor';
+  if (mapped === 'Partner') return 'partner';
+  if (mapped === 'Investor') return 'investor';
+  return 'service_provider';
+}
+
 function validateRegistrationStep(reg, step) {
   if (step === 0) {
     if (!hasText(reg.email)) return 'Email is required.';
@@ -206,7 +216,11 @@ export default function LoginPage({ authError }) {
       const cred = await createUserWithEmailAndPassword(auth, reg.email.trim(), reg.password);
       createdUser = cred.user;
       const fn = httpsCallable(functions, 'complete_entity_registration');
-      await fn({ accountType: reg.accountType, profile: buildRegistrationProfile(reg) });
+      await fn({
+        accountType: reg.accountType,
+        requestedRoleKey: requestedRoleKeyForRegistration(reg),
+        profile: buildRegistrationProfile(reg),
+      });
       done = true;
       await signOut(auth);
       await signInWithEmailAndPassword(auth, reg.email.trim(), reg.password);

@@ -20,18 +20,28 @@ import PrivacyPolicyPage from './pages/PrivacyPolicyPage';
 import SettingsPage from './pages/SettingsPage';
 import CreateProgrammePage from './pages/CreateProgrammePage';
 import OutcomesPage from './pages/OutcomesPage';
+import FeatureGuidePage from './pages/FeatureGuidePage';
+
+const ADMIN_ROLES = new Set(['platform_admin', 'organisation_admin', 'programme_admin', 'admin']);
+const CONTRIBUTOR_ROLES = new Set(['mentor', 'partner', 'investor', 'service_provider', 'contributor']);
+
+function normaliseRoleKey(account) {
+  if (account?.roleKey) return account.roleKey;
+  if (account?.accountType === 'startup') return 'startup';
+  if (account?.accountType === 'contributor') return 'mentor';
+  if (account?.accountType === 'organisation') return 'organisation_admin';
+  return 'startup';
+}
 
 function mapAccountToUser(firebaseUser, account) {
-  let role = 'admin';
-  if (account.accountType === 'startup') role = 'company';
-  if (account.accountType === 'contributor') role = 'contributor';
+  const roleKey = normaliseRoleKey(account);
 
   return {
     uid: firebaseUser.uid,
     email: firebaseUser.email,
     accountType: account.accountType,
     entityType: account.entityType,
-    role,
+    roleKey,
     id: account.entityId,
     name: account.displayName || firebaseUser.email || 'Lattice Account',
     status: account.status || 'Pending',
@@ -130,9 +140,13 @@ export default function App() {
   if (!user) return <LoginPage authError={authError} />;
   if (user.status !== 'Active') return <PendingAccountPage user={user} onLogout={() => signOut(auth)} />;
 
-  let Home = DashboardPage;
-  if (user.role === 'company') Home = () => <CompanyDashboard user={user} />;
-  if (user.role === 'contributor') Home = () => <ContributorDashboard user={user} />;
+  const isAdmin = ADMIN_ROLES.has(user.roleKey);
+  const isStartup = user.roleKey === 'startup';
+  const isContributor = CONTRIBUTOR_ROLES.has(user.roleKey);
+
+  let Home = () => <DashboardPage user={user} />;
+  if (isStartup) Home = () => <CompanyDashboard user={user} />;
+  if (isContributor) Home = () => <ContributorDashboard user={user} />;
 
   const handleLogout = () => signOut(auth);
 
@@ -157,8 +171,8 @@ export default function App() {
           <main className="app-page">
             <Routes>
               <Route path="/" element={<Home />} />
-              {user.role === 'admin' && <>
-                <Route path="/matches" element={<MatchesPage />} />
+              {isAdmin && <>
+                <Route path="/matches" element={<MatchesPage user={user} />} />
                 <Route path="/insights" element={<InsightsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/outcomes" element={<OutcomesPage />} />
@@ -168,7 +182,8 @@ export default function App() {
               <Route path="/companies/:id" element={<CompanyDetailPage />} />
               <Route path="/contributors" element={<ContributorsPage />} />
               <Route path="/programmes" element={<ProgrammesPage />} />
-              <Route path="/programmes/:id" element={<ProgrammeDetailPage />} />
+              <Route path="/programmes/:id" element={<ProgrammeDetailPage user={user} />} />
+              <Route path="/feature-guide" element={<FeatureGuidePage user={user} />} />
               <Route path="/privacy" element={<PrivacyPolicyPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

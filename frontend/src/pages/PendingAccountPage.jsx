@@ -1,6 +1,7 @@
 import { StatusPill } from '../components/Shared';
 
 function entityLabel(user) {
+  if (user.roleKey) return user.roleKey.replaceAll('_', ' ');
   if (user.accountType === 'startup') return 'startup';
   if (user.accountType === 'contributor') return 'contributor';
   if (user.accountType === 'organisation') return 'organisation';

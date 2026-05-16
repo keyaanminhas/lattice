@@ -25,6 +25,8 @@ VALID_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review", "Completed"
 VALID_OUTCOME_ACHIEVEMENTS = {"Yes", "Partial", "No"}
 ACTIVE_MENTOR_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review"}
 AI_INSIGHT_SEVERITIES = {"low", "medium", "high"}
+ADMIN_ROLE_KEYS = {"platform_admin", "organisation_admin", "programme_admin"}
+CONTRIBUTOR_ROLE_KEYS = {"mentor", "partner", "investor", "service_provider"}
 PROFILE_REQUIRED_FIELDS = (
     "summary",
     "autoTags",
@@ -123,6 +125,9 @@ def _require_account(req: https_fn.CallableRequest, db):
         )
 
     account = {"uid": req.auth.uid, **account_doc.to_dict()}
+    # Backward compatibility for legacy accounts that only had accountType.
+    if not account.get("roleKey"):
+        account["roleKey"] = _legacy_account_type_to_role_key(account.get("accountType"))
     if account.get("status") == "Suspended":
         raise https_fn.HttpsError(
             code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
@@ -132,11 +137,8 @@ def _require_account(req: https_fn.CallableRequest, db):
 
 
 def _is_admin_account(account: dict) -> bool:
-    return account.get("status") == "Active" and account.get("accountType") in [
-        "organisation",
-        "organisationAdmin",
-        "platformAdmin",
-    ]
+    role_key = _clean_string(account.get("roleKey")).lower()
+    return account.get("status") == "Active" and role_key in ADMIN_ROLE_KEYS
 
 
 def _require_admin(req: https_fn.CallableRequest, db):
@@ -149,12 +151,62 @@ def _require_admin(req: https_fn.CallableRequest, db):
     return account
 
 
+def _has_role_assignment(
+    db,
+    uid: str,
+    role_key: str,
+    scope_type: str,
+    scope_id: str,
+    accepted_statuses: set[str] | None = None,
+) -> bool:
+    statuses = accepted_statuses or {"active"}
+    query = (
+        db.collection("roleAssignments")
+        .where("uid", "==", uid)
+        .where("roleKey", "==", role_key)
+        .where("scopeType", "==", scope_type)
+        .where("scopeId", "==", scope_id)
+    )
+    for doc in query.stream():
+        data = doc.to_dict()
+        if _clean_string(data.get("status")).lower() in statuses:
+            return True
+    return False
+
+
+def _load_programme(db, programme_id: str) -> dict[str, Any]:
+    programme_doc = _get_document_or_error(db, "programmes", programme_id, "Programme")
+    return {"id": programme_doc.id, **programme_doc.to_dict()}
+
+
+def _require_admin_scope_for_programme(db, account: dict, programme_id: str):
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if role_key == "platform_admin":
+        return
+
+    programme = _load_programme(db, programme_id)
+    if role_key == "programme_admin":
+        if _has_role_assignment(db, account["uid"], "programme_admin", "programme", programme_id):
+            return
+    if role_key == "organisation_admin":
+        organisation_id = _clean_string(programme.get("organisationId"))
+        if organisation_id and _has_role_assignment(
+            db, account["uid"], "organisation_admin", "organisation", organisation_id
+        ):
+            return
+
+    raise https_fn.HttpsError(
+        code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+        message="You do not have access to this programme scope.",
+    )
+
+
 def _require_startup_owner_or_admin(account: dict, startup_id: str):
     if _is_admin_account(account):
         return
     if (
         account.get("status") == "Active"
-        and account.get("accountType") == "startup"
+        and _clean_string(account.get("roleKey")).lower() == "startup"
         and account.get("entityType") == "company"
         and account.get("entityId") == startup_id
     ):
@@ -187,6 +239,37 @@ def _clean_positive_int(value, fallback: int = 1) -> int:
     return parsed if parsed > 0 else fallback
 
 
+def _legacy_account_type_to_role_key(account_type: str | None) -> str:
+    account_type = _clean_string(account_type).lower()
+    if account_type in {"platformadmin", "platform_admin"}:
+        return "platform_admin"
+    if account_type in {"organisationadmin", "organisation_admin", "organisation"}:
+        return "organisation_admin"
+    if account_type in {"programmeadmin", "programme_admin"}:
+        return "programme_admin"
+    if account_type == "startup":
+        return "startup"
+    if account_type == "contributor":
+        # Legacy contributor accounts are now split into sub-roles. Keep a safe default.
+        return "mentor"
+    return "startup"
+
+
+def _normalise_role_key(role_key: str) -> str:
+    key = _clean_string(role_key).lower().replace(" ", "_").replace("-", "_")
+    mapping = {
+        "organization_admin": "organisation_admin",
+        "organisation": "organisation_admin",
+        "platformadmin": "platform_admin",
+        "programmeadmin": "programme_admin",
+        "serviceprovider": "service_provider",
+        "technical_provider": "service_provider",
+        "technicalprovider": "service_provider",
+        "company": "startup",
+    }
+    return mapping.get(key, key)
+
+
 def _require_profile_name(profile: dict, *keys: str) -> str:
     for key in keys:
         value = _clean_string(profile.get(key))
@@ -204,9 +287,18 @@ def _normalise_contributor_types(value) -> list[str]:
     return list(dict.fromkeys(selected)) or ["Mentor"]
 
 
-def _registration_account(uid: str, account_type: str, entity_type: str, entity_id: str, display_name: str, email: str) -> dict:
+def _registration_account(
+    uid: str,
+    account_type: str,
+    role_key: str,
+    entity_type: str,
+    entity_id: str,
+    display_name: str,
+    email: str,
+) -> dict:
     return {
         "accountType": account_type,
+        "roleKey": role_key,
         "entityType": entity_type,
         "entityId": entity_id,
         "displayName": display_name,
@@ -228,6 +320,7 @@ def complete_entity_registration(req: https_fn.CallableRequest):
 
     data = req.data if isinstance(req.data, dict) else {}
     account_type = _clean_string(data.get("accountType"))
+    requested_role_key = _normalise_role_key(_clean_string(data.get("requestedRoleKey")))
     profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
     if account_type not in ["startup", "contributor", "organisation"]:
         raise https_fn.HttpsError(
@@ -246,6 +339,7 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         )
 
     if account_type == "startup":
+        role_key = "startup"
         entity_type = "company"
         entity_id = f"comp-{uid}"
         display_name = _require_profile_name(profile, "name", "startupName", "companyName")
@@ -274,12 +368,21 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         entity_type = "contributor"
         entity_id = f"cont-{uid}"
         display_name = _require_profile_name(profile, "name", "contributorName")
+        contributor_types = _normalise_contributor_types(profile.get("contributorTypes"))
+        contributor_primary_type = contributor_types[0] if contributor_types else "Mentor"
+        role_from_type = {
+            "Mentor": "mentor",
+            "Partner": "partner",
+            "Investor": "investor",
+            "Service Provider": "service_provider",
+        }.get(contributor_primary_type, "mentor")
+        role_key = requested_role_key if requested_role_key in CONTRIBUTOR_ROLE_KEYS else role_from_type
         entity_payload = {
             "id": entity_id,
             "authUid": uid,
             "organisationId": f"org-contrib-{uid}",
             "name": display_name,
-            "contributorTypes": _normalise_contributor_types(profile.get("contributorTypes")),
+            "contributorTypes": contributor_types,
             "expertise": _clean_string_list(profile.get("expertise")),
             "supportedStages": _clean_string_list(profile.get("supportedStages")),
             "investmentThesis": _clean_string_list(profile.get("investmentThesis")),
@@ -298,6 +401,7 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         }
         entity_ref = db.collection("contributors").document(entity_id)
     else:
+        role_key = "organisation_admin"
         entity_type = "organisation"
         entity_id = f"org-{uid}"
         display_name = _require_profile_name(profile, "name", "organisationName")
@@ -320,7 +424,7 @@ def complete_entity_registration(req: https_fn.CallableRequest):
             message="This entity registration already exists.",
         )
 
-    account_payload = _registration_account(uid, account_type, entity_type, entity_id, display_name, email)
+    account_payload = _registration_account(uid, account_type, role_key, entity_type, entity_id, display_name, email)
     batch = db.batch()
     batch.set(entity_ref, entity_payload)
     batch.set(account_ref, account_payload)
@@ -329,6 +433,7 @@ def complete_entity_registration(req: https_fn.CallableRequest):
     return {
         "account": {
             "accountType": account_type,
+            "roleKey": role_key,
             "entityType": entity_type,
             "entityId": entity_id,
             "displayName": display_name,
@@ -2047,10 +2152,13 @@ def recommend_contributor_to_programmes(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def recommend_mentor_for_startup(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     data = _require_data(req)
     startup_id = _require_string(data, "startupId")
     _require_startup_owner_or_admin(account, startup_id)
     programme_id = _require_string(data, "programmeId")
+    if _is_admin_account(account):
+        _require_admin_scope_for_programme(db, account, programme_id)
 
     startup_doc = _get_document_or_error(db, "companies", startup_id, "Startup")
     programme_doc = _get_document_or_error(db, "programmes", programme_id, "Programme")
@@ -2144,6 +2252,7 @@ def recommend_mentor_for_startup(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def review_recommendation(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_admin(req, db)
     data = _require_data(req)
     recommendation_id = _require_string(data, "recommendationId")
     decision = _require_choice(data, "decision", VALID_DECISIONS)
@@ -2157,6 +2266,7 @@ def review_recommendation(req: https_fn.CallableRequest):
         )
 
     recommendation = {"id": rec_doc.id, **rec_doc.to_dict()}
+    _require_admin_scope_for_programme(db, account, _clean_string(recommendation.get("programmeId")))
     current_status = recommendation.get("status", "Pending Approval")
 
     if current_status != "Pending Approval":
@@ -2193,6 +2303,7 @@ def review_recommendation(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def update_relationship_status(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_admin(req, db)
     data = _require_data(req)
     relationship_id = _require_string(data, "relationshipId")
     new_status = _require_choice(data, "newStatus", VALID_RELATIONSHIP_STATUSES)
@@ -2206,6 +2317,7 @@ def update_relationship_status(req: https_fn.CallableRequest):
         )
 
     relationship = rel_doc.to_dict()
+    _require_admin_scope_for_programme(db, account, _clean_string(relationship.get("programmeId")))
     current_status = relationship.get("status")
     if current_status == new_status:
         return {"success": True, "relationshipId": relationship_id, "newStatus": new_status}
@@ -2223,6 +2335,7 @@ def update_relationship_status(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def submit_outcome(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_admin(req, db)
     data = _require_data(req)
     relationship_id = _require_string(data, "relationshipId")
     outcome_achieved = _require_choice(data, "outcomeAchieved", VALID_OUTCOME_ACHIEVEMENTS)
@@ -2234,6 +2347,7 @@ def submit_outcome(req: https_fn.CallableRequest):
 
     rel_doc = _get_document_or_error(db, "relationships", relationship_id, "Relationship")
     relationship = rel_doc.to_dict()
+    _require_admin_scope_for_programme(db, account, _clean_string(relationship.get("programmeId")))
     relationship_status = relationship.get("status")
     if relationship_status not in {"Active", "Needs Review", "Completed"}:
         raise https_fn.HttpsError(
@@ -2425,6 +2539,7 @@ def _build_ai_insights_fallback(stats: dict[str, Any]) -> list[dict[str, str]]:
 @https_fn.on_call()
 def summarise_startup_profile(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_account(req, db)
     data = _require_data(req)
     startup_id = _require_string(data, "startupId")
     _require_startup_owner_or_admin(account, startup_id)
@@ -2462,8 +2577,10 @@ def summarise_company_profile(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def get_programme_graph_view(req: https_fn.CallableRequest):
     db = _init_firebase()
+    account = _require_admin(req, db)
     data = _require_data(req)
     programme_id = _require_string(data, "programmeId")
+    _require_admin_scope_for_programme(db, account, programme_id)
     subgraph = get_programme_subgraph(db, programme_id)
     graph_insights = _programme_graph_gaps(subgraph)
     return {
@@ -2480,6 +2597,7 @@ def get_programme_graph_view(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def get_ai_insights(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     _require_data(req)
 
     startups = [doc.to_dict() for doc in db.collection("companies").stream()]
@@ -2577,6 +2695,7 @@ def get_ai_insights(req: https_fn.CallableRequest):
 @https_fn.on_call()
 def get_dashboard_stats(req: https_fn.CallableRequest):
     db = _init_firebase()
+    _require_admin(req, db)
     _require_data(req)
     organisations = [doc.to_dict() for doc in db.collection("organisations").stream()]
     programmes = [doc.to_dict() for doc in db.collection("programmes").stream()]

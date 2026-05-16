@@ -116,3 +116,13 @@ export function GraphEvidence({ evidence }) {
     </div>
   );
 }
+
+export function CapabilityBadge({ actionType = 'read', scope = 'self' }) {
+  const actionVariant = {
+    read: 'gray',
+    write: 'blue',
+    approve: 'green',
+    configure: 'yellow',
+  }[actionType] || 'gray';
+  return <Badge variant={actionVariant}>{`${actionType} · ${scope}`}</Badge>;
+}

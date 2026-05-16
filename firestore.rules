@@ -2,9 +2,82 @@ rules_version='2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function accountDoc() {
+      return get(/databases/$(database)/documents/accounts/$(request.auth.uid));
+    }
+
+    function roleKey() {
+      return isSignedIn() && accountDoc().exists() ? accountDoc().data.roleKey : "";
+    }
+
+    function isAdmin() {
+      return roleKey() in ["platform_admin", "organisation_admin", "programme_admin"];
+    }
+
+    function isOwnAccount(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    match /accounts/{uid} {
+      allow read: if isOwnAccount(uid) || isAdmin();
+      allow create: if isOwnAccount(uid);
+      allow update: if isOwnAccount(uid) || isAdmin();
+      allow delete: if false;
+    }
+
+    match /roleAssignments/{id} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    // Operational collections are readable by signed-in users, but writes stay backend-only.
+    match /organisations/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /programmes/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /companies/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /contributors/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /applications/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /programmeContributors/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /recommendations/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /relationships/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /outcomes/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /graph_edges/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     match /{document=**} {
-      allow read: if true;
-      allow write: if false;
+      allow read, write: if false;
     }
   }
 }

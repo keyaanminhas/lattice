@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "docs:role-matrix": "node scripts/generate-role-feature-docs.mjs",
+    "test:phase1": "playwright test playwright-auth-and-routing.spec.js playwright-role-capabilities.spec.js playwright-permission-deny.spec.js playwright-scope-enforcement.spec.js --reporter=line",
+    "test:phase2": "playwright test playwright-role-flows.spec.js playwright-live-login.spec.js --reporter=line",
+    "test:phase3": "playwright test --reporter=line"
   },
   "dependencies": {
     "firebase": "^12.13.0",

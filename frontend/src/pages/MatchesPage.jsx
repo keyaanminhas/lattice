@@ -3,8 +3,10 @@ import { collection, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import { Badge, GraphEvidence, ScoreBadge, ScoreBreakdown, StatusPill, Spinner } from '../components/Shared';
+import { RoleAccessBanner } from '../components/FeatureVisibility';
+import { trackRoleFeatureEvent } from '../services/telemetry';
 
-export default function MatchesPage() {
+export default function MatchesPage({ user }) {
   const [recommendations, setRecommendations] = useState([]);
   const [startups, setStartups] = useState({});
   const [contributors, setContributors] = useState({});
@@ -45,11 +47,13 @@ export default function MatchesPage() {
     try {
       const review = httpsCallable(functions, 'review_recommendation');
       await review({ recommendationId, decision });
+      trackRoleFeatureEvent('recommendation_review_success', { recommendationId, decision });
       setRecommendations((current) =>
         current.map((item) => (item.id === recommendationId ? { ...item, status: decision } : item))
       );
     } catch (error) {
       console.error('Failed to review recommendation:', error);
+      trackRoleFeatureEvent('permission_attempt_failed', { action: 'review_recommendation', recommendationId, decision });
       alert('Failed to review recommendation. Check the function logs.');
     }
   }
@@ -64,6 +68,7 @@ export default function MatchesPage() {
 
   return (
     <div>
+      <RoleAccessBanner roleKey={user?.roleKey || 'programme_admin'} scopeLabel="Programme-scoped approval action" />
       <div className="hero-panel">
         <div className="hero-kicker">Recommendation Review Board</div>
         <div className="hero-title-row">
