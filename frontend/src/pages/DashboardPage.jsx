@@ -8,12 +8,25 @@ import { useNavigate } from 'react-router-dom';
 export default function DashboardPage() {
   const [stats, setStats] = useState(null);
   const [recentMatches, setRecentMatches] = useState([]);
+  const [companies, setCompanies] = useState({});
+  const [contributors, setContributors] = useState({});
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
     async function load() {
       try {
+        // Load names for mapping
+        const compSnap = await getDocs(collection(db, 'companies'));
+        const compMap = {};
+        compSnap.forEach((d) => { compMap[d.id] = d.data().name; });
+        setCompanies(compMap);
+
+        const contSnap = await getDocs(collection(db, 'contributors'));
+        const contMap = {};
+        contSnap.forEach((d) => { contMap[d.id] = d.data().name; });
+        setContributors(contMap);
+
         // Load dashboard stats from Cloud Function
         const getStats = httpsCallable(functions, 'get_dashboard_stats');
         const result = await getStats({});
@@ -110,8 +123,8 @@ export default function DashboardPage() {
               {recentMatches.map((m) => (
                 <tr key={m.id}>
                   <td>{m.type}</td>
-                  <td>{m.sourceId}</td>
-                  <td>{m.targetId}</td>
+                  <td style={{ fontWeight: 600 }}>{companies[m.sourceId] || m.sourceId}</td>
+                  <td style={{ fontWeight: 500 }}>{contributors[m.targetId] || m.targetId}</td>
                   <td><ScoreBadge score={m.aiMatchScore} /></td>
                   <td><StatusPill status={m.status} /></td>
                 </tr>

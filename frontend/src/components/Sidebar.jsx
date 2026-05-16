@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 
-const navItems = [
+const adminNav = [
   { to: '/', icon: '📊', label: 'Dashboard' },
   { to: '/companies', icon: '🏢', label: 'Companies' },
   { to: '/contributors', icon: '👥', label: 'Contributors' },
@@ -8,15 +8,32 @@ const navItems = [
   { to: '/insights', icon: '💡', label: 'Insights' },
 ];
 
-export default function Sidebar() {
+const companyNav = [
+  { to: '/', icon: '🚀', label: 'My Matches' },
+  { to: '/contributors', icon: '👥', label: 'Browse Ecosystem' },
+];
+
+const contributorNav = [
+  { to: '/', icon: '🤝', label: 'Connection Requests' },
+  { to: '/companies', icon: '🏢', label: 'Browse Startups' },
+];
+
+export default function Sidebar({ user, onLogout }) {
+  const roleNav = user.role === 'admin' ? adminNav : user.role === 'company' ? companyNav : contributorNav;
+
   return (
     <aside className="sidebar">
       <div className="sidebar-logo">
         <h1>Lattice</h1>
-        <span>Admin Dashboard</span>
+        <span>{user.role === 'admin' ? 'Admin Dashboard' : user.role === 'company' ? 'Startup Portal' : 'Mentor Portal'}</span>
       </div>
+      
+      <div style={{ padding: '20px 20px 0', fontSize: 13, color: '#fff', fontWeight: 500 }}>
+        Welcome, {user.name}
+      </div>
+
       <nav className="sidebar-nav">
-        {navItems.map((item) => (
+        {roleNav.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -28,6 +45,15 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
+
+      <div className="sidebar-logout">
+        <button 
+          onClick={onLogout} 
+          style={{ width: '100%', padding: '10px', background: 'transparent', color: '#94A3B8', border: '1px solid #1E293B', borderRadius: 4, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+        >
+          Logout
+        </button>
+      </div>
     </aside>
   );
 }

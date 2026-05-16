@@ -24,9 +24,9 @@
   --color-info: #0EA5E9;
   --color-info-bg: #F0F9FF;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -90,28 +90,29 @@ button {
   left: 0;
   width: var(--sidebar-width);
   height: 100vh;
-  background: var(--color-card);
-  border-right: 1px solid var(--color-border);
+  background: #0B1121; /* Deep Navy */
+  border-right: 1px solid #1E293B;
   display: flex;
   flex-direction: column;
   z-index: 100;
+  color: #fff;
 }
 
 .sidebar-logo {
   padding: 24px 20px 20px;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid #1E293B;
 }
 
 .sidebar-logo h1 {
   font-size: 20px;
   font-weight: 700;
-  color: var(--color-primary);
+  color: #fff;
   letter-spacing: -0.5px;
 }
 
 .sidebar-logo span {
   font-size: 11px;
-  color: var(--color-text-muted);
+  color: #94A3B8;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -128,7 +129,7 @@ button {
   gap: 12px;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
+  color: #94A3B8;
   font-weight: 500;
   font-size: 14px;
   transition: all 0.15s ease;
@@ -136,14 +137,14 @@ button {
 }
 
 .sidebar-nav a:hover {
-  background: var(--color-bg);
-  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
   text-decoration: none;
 }
 
 .sidebar-nav a.active {
-  background: var(--color-primary-bg);
-  color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
   font-weight: 600;
 }
 
@@ -297,7 +298,7 @@ button {
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  border-radius: var(--radius-sm);
+  border-radius: 4px; /* Minimal roundness */
   font-size: 13px;
   font-weight: 600;
   transition: all 0.15s ease;
@@ -580,6 +581,74 @@ button {
   display: grid;
   grid-template-columns: 2fr 1fr;
   gap: 20px;
+}
+
+/* ===== Login Page ===== */
+.login-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  background: var(--color-bg);
+}
+
+.login-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 40px;
+}
+
+.login-right {
+  flex: 1;
+  background: #0B1121;
+  color: white;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 60px;
+}
+
+.login-card {
+  background: white;
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 100%;
+  max-width: 400px;
+}
+
+.role-button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: white;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.role-button:hover {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+}
+
+.role-icon {
+  font-size: 20px;
+}
+
+.sidebar-logout {
+  padding: 20px;
+  border-top: 1px solid #1E293B;
+  margin-top: auto;
 }
 
 /* ===== Responsive ===== */
