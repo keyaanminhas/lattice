@@ -1,15 +1,42 @@
 import { useState } from 'react';
-import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
-import { db } from '../firebase';
+import { auth, db, functions } from '../firebase';
 
 const SECTORS = ['Healthtech', 'Fintech', 'EdTech', 'AgriTech', 'DeepTech', 'Clean Energy', 'Mobility', 'Cybersecurity', 'FoodTech', 'Logistics', 'SaaS', 'IoT', 'AI/ML'];
 const STAGES = ['Idea', 'Pre-seed', 'Seed', 'MVP', 'Growth', 'Series A', 'Scale-up'];
 const OUTCOMES = ['Investor readiness', 'Cloud adoption', 'CISO introductions', 'Compliance readiness', 'Municipality pilots', 'Infrastructure partners', 'Supply chain pilots', 'Manufacturing partners', 'Clinical pilot access', 'Regulatory guidance', 'Banking partnerships', 'Regulatory sandbox access', 'Distribution channels', 'School pilots', 'Government grant access'];
 
-export default function CreateProgrammePage() {
+function functionIsMissing(error) {
+  return ['functions/not-found', 'functions/unimplemented'].includes(error?.code);
+}
+
+function isPermissionDenied(error) {
+  return ['permission-denied', 'functions/permission-denied'].includes(error?.code)
+    || error?.message?.toLowerCase?.().includes('missing or insufficient permissions');
+}
+
+function formatCreateProgrammeError(error) {
+  if (error?.code === 'functions/unauthenticated' || error?.message === 'Unauthenticated') {
+    return 'Your Firebase sign-in session is not fully ready yet. Wait a moment and try again, or reload the app if it persists.';
+  }
+  if (isPermissionDenied(error)) {
+    return 'Programme creation is blocked by the live Firebase security configuration for this account. The current Firestore rules or backend callable are not deployed for organisation-admin writes yet.';
+  }
+  if (error?.code === 'functions/invalid-argument') {
+    return error.message || 'Programme details are incomplete or invalid.';
+  }
+  if (error?.code === 'functions/internal') {
+    return 'The deployed create-programme backend returned an internal error. Check the live Cloud Function logs for create_programme.';
+  }
+  return error?.message || 'Failed to create programme.';
+}
+
+export default function CreateProgrammePage({ user }) {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
   const [form, setForm] = useState({
     name: '', type: 'Accelerator', country: 'Malaysia', region: '',
     targetSectors: [], targetStages: [], expectedOutcomes: [],
@@ -28,20 +55,82 @@ export default function CreateProgrammePage() {
   function addRule() { setForm((p) => ({ ...p, eligibilityRules: [...p.eligibilityRules, ''] })); }
   function removeRule(idx) { setForm((p) => ({ ...p, eligibilityRules: p.eligibilityRules.filter((_, i) => i !== idx) })); }
 
+  async function ensureFirebaseSession(attempts = 12, delayMs = 250) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (auth.currentUser) {
+        await auth.currentUser.getIdToken();
+        return auth.currentUser;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    }
+    throw new Error('Firebase authentication is still initializing.');
+  }
+
+  async function createProgrammeViaFirestore(payload) {
+    if (user?.entityType !== 'organisation' || !user?.id) {
+      throw new Error('This account is missing an organisation scope required for direct programme creation.');
+    }
+
+    const programmeRef = doc(collection(db, 'programmes'));
+    const programme = {
+      id: programmeRef.id,
+      organisationId: user.id,
+      name: payload.name.trim(),
+      type: payload.type,
+      country: payload.country?.trim() || 'Malaysia',
+      region: payload.region?.trim() || '',
+      targetSectors: payload.targetSectors,
+      targetStages: payload.targetStages,
+      expectedOutcomes: payload.expectedOutcomes,
+      eligibilityRules: payload.eligibilityRules,
+      status: payload.status,
+      createdByUid: user.uid,
+      updatedByUid: user.uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    await setDoc(programmeRef, programme);
+    return programme.id;
+  }
+
+  async function createProgrammeViaCallable(payload) {
+    const createProgramme = httpsCallable(functions, 'create_programme');
+    const result = await createProgramme(payload);
+    return result.data.programme.id;
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+    setError('');
     if (!form.name.trim()) return alert('Programme name is required.');
     if (form.targetSectors.length === 0) return alert('Select at least one target sector.');
     setSaving(true);
     try {
-      const docRef = await addDoc(collection(db, 'programmes'), {
+      const payload = {
         ...form,
-        eligibilityRules: form.eligibilityRules.filter((r) => r.trim()),
-        createdAt: serverTimestamp(),
-      });
-      navigate(`/programmes/${docRef.id}`);
-    } catch (e) { console.error(e); alert('Failed to create programme.'); }
-    setSaving(false);
+        organisationId: user?.entityType === 'organisation' ? user.id : undefined,
+        eligibilityRules: form.eligibilityRules.map((rule) => rule.trim()).filter(Boolean),
+      };
+      await ensureFirebaseSession();
+
+      let programmeId = '';
+      try {
+        programmeId = await createProgrammeViaCallable(payload);
+      } catch (callableError) {
+        if (!functionIsMissing(callableError) || user?.entityType !== 'organisation' || !user?.id) {
+          throw callableError;
+        }
+        programmeId = await createProgrammeViaFirestore(payload);
+      }
+
+      navigate(`/programmes/${programmeId}`);
+      return;
+    } catch (error) {
+      console.error(error);
+      setError(formatCreateProgrammeError(error));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -52,6 +141,12 @@ export default function CreateProgrammePage() {
         </button>
         <div><h2 className="page-title">Create Programme</h2><p className="page-subtitle">Define a new programme context for startup admissions and contributor pools.</p></div>
       </div>
+
+      {error ? (
+        <div className="card" style={{ marginBottom: 16, borderColor: '#ba1a1a', background: '#fffbff' }}>
+          <div style={{ color: '#ba1a1a', fontSize: 13, fontWeight: 600 }}>{error}</div>
+        </div>
+      ) : null}
 
       <form onSubmit={handleSubmit}>
         <div className="card">

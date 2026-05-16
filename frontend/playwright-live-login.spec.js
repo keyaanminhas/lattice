@@ -9,6 +9,8 @@ test('local app signs into live Firebase with a provisioned organisation account
 
   await expect(page.getByText('Cradle Fund')).toBeVisible({ timeout: 20000 });
   await expect(page.getByPlaceholder('Search startups, programmes, or contributors...')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText('Open Programmes', { exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText('Recent Recommendations', { exact: true })).toBeVisible({ timeout: 20000 });
 
   await page.screenshot({ path: 'playwright-live-login-success.png', fullPage: true });
 });

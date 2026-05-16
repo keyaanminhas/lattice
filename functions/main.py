@@ -14,6 +14,17 @@ from firebase_functions.options import set_global_options
 
 set_global_options(max_instances=10)
 
+FIREBASE_PROJECT_ID = (
+    os.environ.get("GOOGLE_CLOUD_PROJECT")
+    or os.environ.get("GCLOUD_PROJECT")
+    or "lattice-2026"
+)
+
+try:
+    initialize_app(options={"projectId": FIREBASE_PROJECT_ID})
+except ValueError:
+    pass
+
 MAX_RETRIES = 3
 RETRY_DELAY = 10
 STARTUP_PROGRAMME_THRESHOLD = 60.0
@@ -23,6 +34,7 @@ MAX_RECOMMENDATIONS_PER_CALL = 5
 VALID_DECISIONS = {"Approved", "Rejected"}
 VALID_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review", "Completed", "Rejected", "Expired"}
 VALID_OUTCOME_ACHIEVEMENTS = {"Yes", "Partial", "No"}
+VALID_PROGRAMME_STATUSES = {"Draft", "Open", "Active", "Closed"}
 ACTIVE_MENTOR_RELATIONSHIP_STATUSES = {"Approved", "Active", "Needs Review"}
 AI_INSIGHT_SEVERITIES = {"low", "medium", "high"}
 ADMIN_ROLE_KEYS = {"platform_admin", "organisation_admin", "programme_admin"}
@@ -95,18 +107,14 @@ def _sanitize(value: Any) -> Any:
 
 
 def _init_firebase():
-    try:
-        if os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}:
-            from google.auth.credentials import AnonymousCredentials
-            from google.cloud import firestore as google_firestore
+    if os.environ.get("USE_FIRESTORE_EMULATOR", "").lower() in {"1", "true", "yes"}:
+        from google.auth.credentials import AnonymousCredentials
+        from google.cloud import firestore as google_firestore
 
-            return google_firestore.Client(
-                project=os.environ.get("GOOGLE_CLOUD_PROJECT", "lattice-2026"),
-                credentials=AnonymousCredentials(),
-            )
-        initialize_app()
-    except ValueError:
-        pass
+        return google_firestore.Client(
+            project=FIREBASE_PROJECT_ID,
+            credentials=AnonymousCredentials(),
+        )
     return firestore.client()
 
 
@@ -444,6 +452,105 @@ def complete_entity_registration(req: https_fn.CallableRequest):
             "id": entity_id,
             "status": "Pending",
         },
+    }
+
+
+@https_fn.on_call()
+def create_programme(req: https_fn.CallableRequest):
+    db = _init_firebase()
+    account = _require_admin(req, db)
+    data = _require_data(req)
+
+    role_key = _clean_string(account.get("roleKey")).lower()
+    if role_key not in {"platform_admin", "organisation_admin", "admin"}:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            message="Only platform or organisation admins can create programmes.",
+        )
+
+    name = _require_string(data, "name")
+    programme_type = _require_string(data, "type")
+    target_sectors = list(dict.fromkeys(_clean_string_list(data.get("targetSectors"))))
+    target_stages = list(dict.fromkeys(_clean_string_list(data.get("targetStages"))))
+    expected_outcomes = list(dict.fromkeys(_clean_string_list(data.get("expectedOutcomes"))))
+    eligibility_rules = list(dict.fromkeys(_clean_string_list(data.get("eligibilityRules"))))
+    country = _clean_string(data.get("country"), "Malaysia")
+    region = _clean_string(data.get("region"))
+    status = _clean_string(data.get("status"), "Draft")
+
+    if not target_sectors:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+            message="targetSectors must include at least one sector.",
+        )
+
+    if status not in VALID_PROGRAMME_STATUSES:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+            message=f"status must be one of {sorted(VALID_PROGRAMME_STATUSES)}.",
+        )
+
+    organisation_id = _clean_string(data.get("organisationId"))
+    if role_key == "organisation_admin":
+        if account.get("entityType") != "organisation":
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+                message="This organisation admin account is not linked to an organisation entity.",
+            )
+        organisation_id = _clean_string(account.get("entityId"), organisation_id)
+        if not organisation_id or not _has_role_assignment(
+            db, account["uid"], "organisation_admin", "organisation", organisation_id
+        ):
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+                message="You do not have organisation scope required to create a programme.",
+            )
+    elif not organisation_id:
+        organisation_id = _clean_string(account.get("entityId"))
+
+    if not organisation_id:
+        raise https_fn.HttpsError(
+            code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+            message="organisationId is required to create a programme.",
+        )
+
+    _get_document_or_error(db, "organisations", organisation_id, "Organisation")
+
+    programme_ref = db.collection("programmes").document()
+    programme_id = programme_ref.id
+    payload = {
+        "id": programme_id,
+        "organisationId": organisation_id,
+        "name": name,
+        "type": programme_type,
+        "country": country,
+        "region": region,
+        "targetSectors": target_sectors,
+        "targetStages": target_stages,
+        "eligibilityRules": eligibility_rules,
+        "expectedOutcomes": expected_outcomes,
+        "status": status,
+        "createdByUid": account["uid"],
+        "updatedByUid": account["uid"],
+        "createdAt": firestore.SERVER_TIMESTAMP,
+        "updatedAt": firestore.SERVER_TIMESTAMP,
+    }
+    programme_ref.set(payload, merge=False)
+
+    return {
+        "programme": {
+            "id": programme_id,
+            "organisationId": organisation_id,
+            "name": name,
+            "type": programme_type,
+            "country": country,
+            "region": region,
+            "targetSectors": target_sectors,
+            "targetStages": target_stages,
+            "eligibilityRules": eligibility_rules,
+            "expectedOutcomes": expected_outcomes,
+            "status": status,
+        }
     }
 
 

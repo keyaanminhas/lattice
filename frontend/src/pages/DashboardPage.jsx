@@ -7,6 +7,39 @@ import { ScoreBadge, StatusPill, Spinner } from '../components/Shared';
 import { FeatureVisibilityPanel, RoleAccessBanner } from '../components/FeatureVisibility';
 import { featureFlags } from '../config/featureFlags';
 
+function computeDashboardStats({
+  organisations,
+  programmes,
+  startups,
+  contributors,
+  applications,
+  pools,
+  recommendations,
+  relationships,
+  outcomes,
+}) {
+  const success_rate = outcomes.length
+    ? Math.round(
+      (outcomes.filter((outcome) => outcome.outcomeAchieved === 'Yes').length / outcomes.length) * 1000,
+    ) / 10
+    : 0;
+
+  return {
+    totalOrganisations: organisations.length,
+    openProgrammes: programmes.filter((programme) => ['Open', 'Active'].includes(programme.status)).length,
+    totalStartups: startups.length,
+    verifiedStartups: startups.filter((startup) => startup.verificationStatus === 'Verified').length,
+    totalContributors: contributors.length,
+    programmePoolAssignments: pools.filter((pool) => pool.status === 'Approved').length,
+    pendingApplications: applications.filter((application) => application.status === 'Pending Admin Review').length,
+    acceptedApplications: applications.filter((application) => application.status === 'Accepted').length,
+    pendingRecommendations: recommendations.filter((recommendation) => recommendation.status === 'Pending Approval').length,
+    activeRelationships: relationships.filter((relationship) => relationship.status === 'Active').length,
+    completedRelationships: relationships.filter((relationship) => relationship.status === 'Completed').length,
+    outcomeSuccessRate: success_rate,
+  };
+}
+
 export default function DashboardPage({ user }) {
   const [stats, setStats] = useState(null);
   const [recentRecommendations, setRecentRecommendations] = useState([]);
@@ -19,22 +52,55 @@ export default function DashboardPage({ user }) {
   useEffect(() => {
     async function load() {
       try {
-        const [startupSnap, contributorSnap, programmeSnap] = await Promise.all([
+        const [
+          organisationSnap,
+          startupSnap,
+          contributorSnap,
+          programmeSnap,
+          applicationSnap,
+          poolSnap,
+          recommendationSnap,
+          recentRecommendationSnap,
+          relationshipSnap,
+          outcomeSnap,
+        ] = await Promise.all([
+          getDocs(collection(db, 'organisations')),
           getDocs(collection(db, 'companies')),
           getDocs(collection(db, 'contributors')),
           getDocs(collection(db, 'programmes')),
+          getDocs(collection(db, 'applications')),
+          getDocs(collection(db, 'programmeContributors')),
+          getDocs(collection(db, 'recommendations')),
+          getDocs(query(collection(db, 'recommendations'), limit(5))),
+          getDocs(collection(db, 'relationships')),
+          getDocs(collection(db, 'outcomes')),
         ]);
         const sMap = {}; startupSnap.forEach((d) => { sMap[d.id] = d.data().name; }); setStartups(sMap);
         const cMap = {}; contributorSnap.forEach((d) => { cMap[d.id] = d.data().name; }); setContributors(cMap);
         const pMap = {}; programmeSnap.forEach((d) => { pMap[d.id] = d.data().name; }); setProgrammes(pMap);
-
-        const getStats = httpsCallable(functions, 'get_dashboard_stats');
-        const result = await getStats({});
-        setStats(result.data);
-
-        const recSnap = await getDocs(query(collection(db, 'recommendations'), limit(5)));
-        const recList = []; recSnap.forEach((d) => recList.push({ id: d.id, ...d.data() }));
+        const recList = []; recentRecommendationSnap.forEach((d) => recList.push({ id: d.id, ...d.data() }));
         setRecentRecommendations(recList);
+
+        const fallbackStats = computeDashboardStats({
+          organisations: organisationSnap.docs.map((doc) => doc.data()),
+          programmes: programmeSnap.docs.map((doc) => doc.data()),
+          startups: startupSnap.docs.map((doc) => doc.data()),
+          contributors: contributorSnap.docs.map((doc) => doc.data()),
+          applications: applicationSnap.docs.map((doc) => doc.data()),
+          pools: poolSnap.docs.map((doc) => doc.data()),
+          recommendations: recommendationSnap.docs.map((doc) => doc.data()),
+          relationships: relationshipSnap.docs.map((doc) => doc.data()),
+          outcomes: outcomeSnap.docs.map((doc) => doc.data()),
+        });
+
+        try {
+          const getStats = httpsCallable(functions, 'get_dashboard_stats');
+          const result = await getStats({});
+          setStats(result.data);
+        } catch (error) {
+          console.error('Dashboard stats fallback activated:', error);
+          setStats(fallbackStats);
+        }
       } catch (e) { console.error('Dashboard load failed:', e); }
       setLoading(false);
     }

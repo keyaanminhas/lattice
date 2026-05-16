@@ -50,13 +50,26 @@ function mapAccountToUser(firebaseUser, account) {
 
 async function loadAccountWithRetry(uid, attempts = 8, delayMs = 300) {
   const accountRef = doc(db, 'accounts', uid);
+  let lastError = null;
+
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const accountSnap = await getDoc(accountRef);
-    if (accountSnap.exists()) return { ref: accountRef, snap: accountSnap };
+    try {
+      const accountSnap = await getDoc(accountRef);
+      if (accountSnap.exists()) return { ref: accountRef, snap: accountSnap };
+      lastError = null;
+    } catch (error) {
+      lastError = error;
+    }
+
     if (attempt < attempts - 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs * (attempt + 1)));
     }
   }
+
+  if (lastError) {
+    throw lastError;
+  }
+
   return { ref: accountRef, snap: null };
 }
 
@@ -82,18 +95,22 @@ export default function App() {
 
   useEffect(() => {
     let initialResolved = false;
-    const timeoutId = usingEmulators ? window.setTimeout(() => {
+    const timeoutId = window.setTimeout(() => {
       if (initialResolved) return;
       initialResolved = true;
       setUser(null);
-      setAuthError('Firebase Auth emulator is not reachable. Start Firebase emulators to use demo login or registration.');
+      setAuthError(
+        usingEmulators
+          ? 'Firebase Auth emulator is not reachable. Start Firebase emulators to use demo login or registration.'
+          : 'Authentication is taking too long to initialize. Reload and sign in again if this persists.',
+      );
       setAuthReady(true);
-    }, 2500) : null;
+    }, usingEmulators ? 2500 : 8000);
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (!initialResolved) {
         initialResolved = true;
-        if (timeoutId) window.clearTimeout(timeoutId);
+        window.clearTimeout(timeoutId);
       }
       setAuthError('');
       if (!firebaseUser) {
@@ -131,7 +148,7 @@ export default function App() {
     }
 
     return () => {
-      if (timeoutId) window.clearTimeout(timeoutId);
+      window.clearTimeout(timeoutId);
       unsubscribe();
     };
   }, []);
@@ -176,7 +193,7 @@ export default function App() {
                 <Route path="/insights" element={<InsightsPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/outcomes" element={<OutcomesPage />} />
-                <Route path="/programmes/create" element={<CreateProgrammePage />} />
+                <Route path="/programmes/create" element={<CreateProgrammePage user={user} />} />
               </>}
               <Route path="/companies" element={<CompaniesPage />} />
               <Route path="/companies/:id" element={<CompanyDetailPage />} />
