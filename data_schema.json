@@ -1,15 +1,31 @@
 {
+  "ecosystems": {
+    "description": "The highest-level environment managing multiple programmes and the whole ecosystem.",
+    "schema": {
+      "id": "string (auto-generated)",
+      "name": "string (e.g. 'Malaysia Startup Growth Ecosystem')",
+      "owner": "string (e.g. 'Cradle Fund')",
+      "countries": ["string"],
+      "focusAreas": ["string"],
+      "createdAt": "timestamp"
+    }
+  },
   "programmes": {
     "description": "Structured initiatives supporting companies (e.g. Accelerators, Bootcamps)",
     "schema": {
       "id": "string (auto-generated)",
+      "ecosystemId": "string (reference to ecosystems)",
       "name": "string (e.g. 'AI Startup Accelerator 2026')",
-      "type": "string (e.g. 'Accelerator', 'Grant')",
+      "type": "string (e.g. 'Accelerator', 'Grant', 'Challenge')",
       "targetSectors": ["string"],
       "targetStages": ["string"],
       "region": "string",
+      "eligibilityRules": "string",
       "expectedOutcomes": ["string"],
-      "status": "string ('Active', 'Draft', 'Completed')"
+      "status": "string ('Active', 'Draft', 'Completed')",
+      "startDate": "timestamp",
+      "endDate": "timestamp",
+      "createdAt": "timestamp"
     }
   },
   "companies": {
@@ -20,9 +36,15 @@
       "industry": "string (e.g. 'Healthtech')",
       "stage": "string (e.g. 'MVP', 'Seed')",
       "country": "string",
+      "teamSize": "number",
       "problemStatement": "string",
+      "productDescription": "string",
       "supportNeeds": ["string"],
-      "verificationStatus": "string ('Verified', 'Pending', 'Rejected')"
+      "currentChallenges": ["string"],
+      "pastEngagements": ["string (Relationship IDs)"],
+      "pitchDeckUrl": "string (URL)",
+      "verificationStatus": "string ('Verified', 'Pending', 'Rejected')",
+      "createdAt": "timestamp"
     }
   },
   "contributors": {
@@ -31,26 +53,53 @@
       "id": "string (auto-generated)",
       "name": "string (e.g. 'Dr. Sarah Lim')",
       "type": "string ('Mentor', 'Partner', 'Investor', 'Service Provider')",
+      "organization": "string (e.g. 'HealthTech Partners LLC')",
       "expertise": ["string"],
       "supportedStages": ["string"],
       "capacity": "number (e.g. 3)",
       "availability": "string ('Available', 'Limited', 'Unavailable')",
-      "countryCoverage": ["string"]
+      "countryCoverage": ["string"],
+      "conflictAreas": ["string (e.g. 'Competitor names', 'Specific industries')"],
+      "rating": "number (0-5, based on past outcomes)",
+      "createdAt": "timestamp"
     }
   },
   "relationships": {
     "description": "The AI-generated or manually created linkages between actors",
     "schema": {
       "id": "string (auto-generated)",
-      "type": "string ('Company-to-Mentor', 'Company-to-Programme', 'Company-to-Partner')",
+      "type": "string ('Company-to-Mentor', 'Company-to-Programme', 'Company-to-Partner', 'Partner-to-Initiative')",
       "sourceId": "string (e.g. Company ID)",
       "targetId": "string (e.g. Contributor ID or Programme ID)",
       "programmeContextId": "string (Optional, ID of programme this linkage belongs to)",
+      "adminOwnerId": "string (ID of the admin managing this)",
       "aiMatchScore": "number (0-100)",
       "aiExplanation": "string",
-      "status": "string ('Recommended', 'Pending Approval', 'Approved', 'Active', 'Completed', 'Rejected')",
+      "risks": ["string (e.g. 'Mentor capacity is 1 slot remaining')"],
+      "status": "string ('Recommended', 'Pending Approval', 'Approved', 'Active', 'Needs Review', 'Completed', 'Rejected')",
       "expectedOutcome": "string",
-      "outcomeAchieved": "string ('Pending', 'Yes', 'Partial', 'No')"
+      "engagementNotes": ["string (Log of progress updates)"],
+      "reusabilityTag": "boolean (whether this type of match was effective and should be reused)",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    }
+  },
+  "outcomes": {
+    "description": "Feedback and post-engagement analysis to improve future AI matching",
+    "schema": {
+      "id": "string (auto-generated)",
+      "relationshipId": "string (reference to relationships)",
+      "companyRating": "number (1-5)",
+      "companyFeedback": "string",
+      "contributorRating": "number (1-5)",
+      "contributorFeedback": "string",
+      "adminEvaluation": "string",
+      "outcomeAchieved": "string ('Yes', 'Partial', 'No')",
+      "outcomeType": "string (e.g. 'Funding', 'Pilot Access', 'Mentorship Value')",
+      "relationshipQuality": "string ('Low', 'Medium', 'High')",
+      "futureRecommendationValue": "boolean (Should AI recommend similar matches?)",
+      "lessonLearned": "string (AI-generated summary of why it worked or failed)",
+      "createdAt": "timestamp"
     }
   }
 }

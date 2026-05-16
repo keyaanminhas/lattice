@@ -1,31 +1,26 @@
 import os
 import json
 import numpy as np
-import google.generativeai as genai
 from firebase_functions import https_fn
 from firebase_functions.options import set_global_options
 from firebase_admin import initialize_app, firestore
 
-# Initialize Firebase Admin
-initialize_app()
-db = firestore.client()
+# We will initialize Firebase Admin lazily inside the function
 
 set_global_options(max_instances=10)
 
-def get_gemini_key():
-    # Make sure to set GEMINI_API_KEY in your environment, or hardcode here for testing
-    api_key = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
-    genai.configure(api_key=api_key)
-
 def get_embedding(text: str) -> list[float]:
     """Generates an embedding for the given text using Gemini."""
-    get_gemini_key()
-    result = genai.embed_content(
-        model="models/text-embedding-004",
-        content=text,
-        task_type="retrieval_document"
+    from google import genai
+    # Make sure to set GEMINI_API_KEY in your environment, or hardcode here for testing
+    api_key = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
+    
+    response = client.models.embed_content(
+        model="gemini-embedding-2",
+        contents=text
     )
-    return result['embedding']
+    return response.embeddings[0].values
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Calculates cosine similarity between two vectors."""
@@ -38,8 +33,9 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 
 def generate_explanation(company_data: dict, contributor_data: dict, score: float) -> str:
     """Generates a human-readable explanation of why this match makes sense."""
-    get_gemini_key()
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    from google import genai
+    api_key = os.environ.get("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY")
+    client = genai.Client(api_key=api_key)
     
     prompt = f"""
     You are an AI Relationship Engine for an innovation ecosystem.
@@ -52,16 +48,25 @@ def generate_explanation(company_data: dict, contributor_data: dict, score: floa
     Also mention one potential risk (e.g. capacity or stage mismatch).
     """
     
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=prompt
+    )
     return response.text.strip()
 
 @https_fn.on_call()
-def generate_matches_for_company(req: https_fn.CallableRequest) -> any:
+def generate_matches_for_company(req: https_fn.CallableRequest):
     """
     Cloud Function callable from the frontend.
     Accepts: { "companyId": "comp-1" }
     Returns: List of recommended relationships.
     """
+    try:
+        initialize_app()
+    except ValueError:
+        pass # Already initialized
+    db = firestore.client()
+
     company_id = req.data.get("companyId")
     if not company_id:
         raise https_fn.HttpsError(
