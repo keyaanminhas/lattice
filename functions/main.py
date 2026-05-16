@@ -12,7 +12,7 @@ set_global_options(max_instances=10)
 
 # Retry config for Gemini API rate limits
 MAX_RETRIES = 3
-RETRY_DELAY = 2  # seconds, doubles each retry
+RETRY_DELAY = 10  # seconds, doubles each retry
 
 
 def _sanitize(doc_dict: dict) -> dict:
@@ -100,6 +100,21 @@ def generate_explanation(company_data: dict, contributor_data: dict, score: floa
     Also mention one potential risk (e.g. capacity or stage mismatch).
     """
 
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt
+            )
+            return response.text.strip()
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                wait = RETRY_DELAY * (2 ** attempt)
+                time.sleep(wait)
+            else:
+                raise
+    
+    # Final attempt
     response = client.models.generate_content(
         model='gemini-2.5-flash',
         contents=prompt
