@@ -3,14 +3,35 @@ import { createUserWithEmailAndPassword, deleteUser, signInWithEmailAndPassword,
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions, usingEmulators } from '../firebase';
 import {
-  SECTOR_OPTIONS, STAGE_OPTIONS, TEAM_SIZE_OPTIONS, SUPPORT_NEED_OPTIONS,
-  CHALLENGE_OPTIONS, TRACTION_OPTIONS, CONTRIBUTOR_TYPE_OPTIONS,
-  SECTOR_EXPERTISE_OPTIONS, SUPPORT_AREA_OPTIONS, SUPPORTED_STAGE_OPTIONS,
-  COUNTRY_OPTIONS, ORG_TYPE_OPTIONS, FOCUS_SECTOR_OPTIONS,
-  CONTRIBUTOR_TYPE_MAP, STEP_LABELS, initialRegistration, demoAccounts,
+  SECTOR_OPTIONS,
+  STAGE_OPTIONS,
+  TEAM_SIZE_OPTIONS,
+  TEAM_SIZE_RANGE_META,
+  SUPPORT_NEED_OPTIONS,
+  CHALLENGE_OPTIONS,
+  TRACTION_OPTIONS,
+  CONTRIBUTOR_TYPE_OPTIONS,
+  SECTOR_EXPERTISE_OPTIONS,
+  SUPPORT_AREA_OPTIONS,
+  SUPPORTED_STAGE_OPTIONS,
+  COUNTRY_OPTIONS,
+  COUNTRY_COVERAGE_OPTIONS,
+  ORG_TYPE_OPTIONS,
+  FOCUS_SECTOR_OPTIONS,
+  CONTRIBUTOR_TYPE_MAP,
+  STEP_LABELS,
+  initialRegistration,
+  demoAccounts,
 } from './registrationOptions';
 import {
-  WizardProgress, MultiSelect, FieldHelper, WizardNav, ReviewField, ReviewSection,
+  WizardProgress,
+  FieldHelper,
+  WizardNav,
+  ReviewField,
+  ReviewSection,
+  SearchableSelect,
+  SearchableMultiSelect,
+  CustomMultiSelectField,
 } from './WizardComponents';
 
 function formatAuthError(error) {
@@ -29,44 +50,92 @@ function formatAuthError(error) {
   return error?.message || 'Authentication failed.';
 }
 
+function uniqueValues(values) {
+  return Array.from(new Set((values || []).map((item) => `${item}`.trim()).filter(Boolean)));
+}
+
+function mergeValues(baseValues, customValues) {
+  return uniqueValues([...(baseValues || []), ...(customValues || [])]);
+}
+
+function parseTeamSizeRange(rangeValue) {
+  const meta = TEAM_SIZE_RANGE_META[rangeValue] || TEAM_SIZE_RANGE_META['Prefer not to say'];
+  return {
+    teamSizeRange: rangeValue || 'Prefer not to say',
+    teamSizeMin: meta.min,
+    teamSizeMax: meta.max,
+    teamSizeKnown: Boolean(meta.known),
+    teamSize: meta.compatibility,
+  };
+}
+
+function resolveStartupSector(registration) {
+  if (registration.sector === 'Other') {
+    return registration.customSector.trim();
+  }
+  return registration.sector.trim();
+}
+
 function buildRegistrationProfile(r) {
   if (r.accountType === 'startup') {
     const traction = r.tractionDetail ? `${r.tractionLevel} - ${r.tractionDetail}` : r.tractionLevel;
+    const resolvedSector = resolveStartupSector(r);
+    const teamSize = parseTeamSizeRange(r.teamSizeRange);
+    const supportNeeds = mergeValues(r.supportNeeds, r.customSupportNeeds);
+    const currentChallenges = mergeValues(r.currentChallenges, r.customChallenges);
     return {
       name: r.startupName.trim(),
-      sector: r.sector,
+      sector: resolvedSector,
+      industry: resolvedSector,
+      customSector: r.sector === 'Other' ? r.customSector.trim() : '',
       stage: r.stage,
       country: r.country,
-      teamSize: r.teamSize,
-      supportNeeds: r.supportNeeds,
-      currentChallenges: r.currentChallenges,
+      ...teamSize,
+      supportNeeds,
+      customSupportNeeds: uniqueValues(r.customSupportNeeds),
+      currentChallenges,
+      customChallenges: uniqueValues(r.customChallenges),
       problemStatement: r.problemStatement.trim(),
       productDescription: r.productDescription.trim(),
       traction,
     };
   }
+
   if (r.accountType === 'contributor') {
-    const mapped = CONTRIBUTOR_TYPE_MAP[r.contributorType] || r.contributorType;
+    const primaryContributorType = r.contributorType;
+    const mapped = CONTRIBUTOR_TYPE_MAP[primaryContributorType] || '';
+    const expertise = mergeValues(r.sectorExpertise, r.customExpertise);
+    const supportAreas = mergeValues(r.supportAreas, r.customSupportAreas);
     return {
       name: r.contributorName.trim(),
-      contributorTypes: [mapped],
-      expertise: r.sectorExpertise,
-      supportedStages: r.supportedStages,
+      primaryContributorType,
+      contributorTypes: mapped ? [mapped] : [],
+      expertise,
+      customExpertise: uniqueValues(r.customExpertise),
+      supportedStages: uniqueValues(r.supportedStages),
       investmentThesis: r.investmentThesis ? r.investmentThesis.split(',').map((s) => s.trim()).filter(Boolean) : [],
       ticketSize: r.ticketSize.trim(),
-      countryCoverage: r.countryCoverage,
-      canSupport: r.supportAreas,
-      availability: r.availability,
-      globalMaxProgrammes: r.globalMaxProgrammes,
-      globalMaxStartupAssignments: r.globalMaxStartupAssignments,
-      perProgrammeStartupCapacity: r.perProgrammeStartupCapacity,
+      countryCoverage: uniqueValues(r.countryCoverage),
+      canSupport: supportAreas,
+      supportAreas,
+      customSupportAreas: uniqueValues(r.customSupportAreas),
     };
   }
+
+  const orgType = r.organisationType === 'Other' ? r.customOrganisationType.trim() : r.organisationType;
+  const focusSectors = mergeValues(r.focusSectors, r.customFocusSectors);
+  const mainSupportAreas = mergeValues(r.mainSupportAreas, r.customMainSupportAreas);
   return {
     name: r.organisationName.trim(),
-    organisationType: r.organisationType,
+    organisationType: orgType,
+    customOrganisationType: r.organisationType === 'Other' ? r.customOrganisationType.trim() : '',
     country: r.country,
-    focusAreas: r.focusSectors,
+    focusSectors,
+    customFocusSectors: uniqueValues(r.customFocusSectors),
+    mainSupportAreas,
+    customMainSupportAreas: uniqueValues(r.customMainSupportAreas),
+    focusAreas: focusSectors,
+    supportAreas: mainSupportAreas,
   };
 }
 
@@ -78,14 +147,19 @@ function hasItems(value) {
   return Array.isArray(value) && value.length > 0;
 }
 
+function hasAnyItems(primaryItems, customItems) {
+  return hasItems(uniqueValues(primaryItems)) || hasItems(uniqueValues(customItems));
+}
+
 function requestedRoleKeyForRegistration(reg) {
   if (reg.accountType === 'startup') return 'startup';
   if (reg.accountType === 'organisation') return 'organisation_admin';
-  const mapped = CONTRIBUTOR_TYPE_MAP[reg.contributorType] || 'Mentor';
+  const mapped = CONTRIBUTOR_TYPE_MAP[reg.contributorType];
   if (mapped === 'Mentor') return 'mentor';
   if (mapped === 'Partner') return 'partner';
   if (mapped === 'Investor') return 'investor';
-  return 'service_provider';
+  if (mapped === 'Service Provider') return 'service_provider';
+  return '';
 }
 
 function validateRegistrationStep(reg, step) {
@@ -100,8 +174,9 @@ function validateRegistrationStep(reg, step) {
     if (step === 1) {
       if (!hasText(reg.startupName)) return 'Startup name is required.';
       if (!hasText(reg.sector)) return 'Select a sector.';
+      if (reg.sector === 'Other' && !hasText(reg.customSector)) return 'Custom sector is required when sector is Other.';
       if (!hasText(reg.country)) return 'Select a country.';
-      if (!hasText(reg.teamSize)) return 'Select a team size.';
+      if (!hasText(reg.teamSizeRange)) return 'Select a team size range.';
     }
     if (step === 2) {
       if (!hasText(reg.stage)) return 'Select a stage.';
@@ -109,23 +184,21 @@ function validateRegistrationStep(reg, step) {
       if (!hasText(reg.productDescription)) return 'Product description is required.';
     }
     if (step === 3) {
-      if (!hasItems(reg.supportNeeds)) return 'Select at least one support need.';
-      if (!hasItems(reg.currentChallenges)) return 'Select at least one current challenge.';
+      if (!hasAnyItems(reg.supportNeeds, reg.customSupportNeeds)) return 'Select at least one support need or add a custom support need.';
+      if (!hasAnyItems(reg.currentChallenges, reg.customChallenges)) return 'Select at least one current challenge or add a custom challenge.';
     }
   }
 
   if (reg.accountType === 'contributor') {
     if (step === 1) {
       if (!hasText(reg.contributorName)) return 'Contributor name is required.';
-      if (!hasText(reg.contributorType)) return 'Select a contributor type.';
+      if (!hasText(reg.contributorType)) return 'Select contributor type.';
     }
     if (step === 2) {
-      if (!hasItems(reg.sectorExpertise)) return 'Select at least one expertise area.';
+      if (!hasAnyItems(reg.sectorExpertise, reg.customExpertise)) return 'Select at least one expertise area or add custom expertise.';
       if (!hasItems(reg.supportedStages)) return 'Select at least one supported stage.';
-      if (!hasItems(reg.countryCoverage)) return 'Select at least one country.';
-      if (reg.contributorType === 'Professional Service Provider' && !hasItems(reg.supportAreas)) {
-        return 'Select at least one support area.';
-      }
+      if (!hasItems(reg.countryCoverage)) return 'Select at least one country coverage value.';
+      if (!hasAnyItems(reg.supportAreas, reg.customSupportAreas)) return 'Select at least one support area or add a custom support area.';
     }
   }
 
@@ -133,10 +206,12 @@ function validateRegistrationStep(reg, step) {
     if (step === 1) {
       if (!hasText(reg.organisationName)) return 'Organisation name is required.';
       if (!hasText(reg.organisationType)) return 'Select an organisation type.';
+      if (reg.organisationType === 'Other' && !hasText(reg.customOrganisationType)) return 'Custom organisation type is required when type is Other.';
       if (!hasText(reg.country)) return 'Select a country.';
     }
-    if (step === 2 && !hasItems(reg.focusSectors)) {
-      return 'Select at least one focus sector.';
+    if (step === 2) {
+      if (!hasAnyItems(reg.focusSectors, reg.customFocusSectors)) return 'Select at least one focus sector or add a custom focus sector.';
+      if (!hasAnyItems(reg.mainSupportAreas, reg.customMainSupportAreas)) return 'Select at least one main support area or add a custom support area.';
     }
   }
 
@@ -292,19 +367,17 @@ export default function LoginPage({ authError }) {
         <label>Startup name<input value={reg.startupName} onChange={(e) => up('startupName', e.target.value)} required /></label>
         <div className="auth-form-grid">
           <label>Sector
-            <select value={reg.sector} onChange={(e) => up('sector', e.target.value)} required>
-              <option value="">Select sector</option>
-              {SECTOR_OPTIONS.map((sector) => <option key={sector}>{sector}</option>)}
-            </select>
+            <SearchableSelect options={SECTOR_OPTIONS} value={reg.sector} onChange={(value) => up('sector', value)} placeholder="Select sector" />
           </label>
           <label>Country
-            <select value={reg.country} onChange={(e) => up('country', e.target.value)} required>
-              {COUNTRY_OPTIONS.map((country) => <option key={country}>{country}</option>)}
-            </select>
+            <SearchableSelect options={COUNTRY_OPTIONS} value={reg.country} onChange={(value) => up('country', value)} placeholder="Search country" />
           </label>
         </div>
+        {reg.sector === 'Other' && (
+          <label>Custom sector<input value={reg.customSector} onChange={(e) => up('customSector', e.target.value)} placeholder="Enter your sector" required /></label>
+        )}
         <label>Team size
-          <select value={reg.teamSize} onChange={(e) => up('teamSize', e.target.value)} required>
+          <select value={reg.teamSizeRange} onChange={(e) => up('teamSizeRange', e.target.value)} required>
             <option value="">Select range</option>
             {TEAM_SIZE_OPTIONS.map((teamSize) => <option key={teamSize}>{teamSize}</option>)}
           </select>
@@ -316,18 +389,12 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Product & Stage</h3>
         <label>Stage
-          <select value={reg.stage} onChange={(e) => up('stage', e.target.value)} required>
-            <option value="">Select stage</option>
-            {STAGE_OPTIONS.map((stageOption) => <option key={stageOption}>{stageOption}</option>)}
-          </select>
+          <SearchableSelect options={STAGE_OPTIONS} value={reg.stage} onChange={(value) => up('stage', value)} placeholder="Select stage" />
         </label>
         <label>Problem statement<textarea value={reg.problemStatement} onChange={(e) => up('problemStatement', e.target.value)} required /></label>
         <label>Product description<textarea value={reg.productDescription} onChange={(e) => up('productDescription', e.target.value)} required /></label>
         <label>Traction
-          <select value={reg.tractionLevel} onChange={(e) => up('tractionLevel', e.target.value)}>
-            <option value="">Select traction level</option>
-            {TRACTION_OPTIONS.map((tractionOption) => <option key={tractionOption}>{tractionOption}</option>)}
-          </select>
+          <SearchableSelect options={TRACTION_OPTIONS} value={reg.tractionLevel} onChange={(value) => up('tractionLevel', value)} placeholder="Select traction level" isClearable />
         </label>
         {reg.tractionLevel && reg.tractionLevel !== 'No traction yet' && reg.tractionLevel !== 'Early conversations' && (
           <label>Traction details<textarea value={reg.tractionDetail} onChange={(e) => up('tractionDetail', e.target.value)} placeholder="Describe your traction milestones" /></label>
@@ -339,11 +406,25 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Needs</h3>
         <label>Support needs</label>
-        <FieldHelper text="What kind of help does your startup need from the ecosystem?" />
-        <MultiSelect options={SUPPORT_NEED_OPTIONS} value={reg.supportNeeds} onChange={(value) => up('supportNeeds', value)} />
+        <FieldHelper text="Choose support needs and add custom ones if the list does not fit." />
+        <CustomMultiSelectField
+          options={SUPPORT_NEED_OPTIONS}
+          selected={reg.supportNeeds}
+          customValues={reg.customSupportNeeds}
+          onSelectedChange={(value) => up('supportNeeds', value)}
+          onCustomChange={(value) => up('customSupportNeeds', value)}
+          placeholder="Select or add custom support needs"
+        />
         <label style={{ marginTop: 12 }}>Current challenges</label>
-        <FieldHelper text="Select the blockers your team is facing right now." />
-        <MultiSelect options={CHALLENGE_OPTIONS} value={reg.currentChallenges} onChange={(value) => up('currentChallenges', value)} />
+        <FieldHelper text="Choose current blockers and add custom challenges when needed." />
+        <CustomMultiSelectField
+          options={CHALLENGE_OPTIONS}
+          selected={reg.currentChallenges}
+          customValues={reg.customChallenges}
+          onSelectedChange={(value) => up('currentChallenges', value)}
+          onCustomChange={(value) => up('customChallenges', value)}
+          placeholder="Select or add custom challenges"
+        />
       </>
     );
 
@@ -351,9 +432,9 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Review your startup profile</h3>
         <ReviewSection title="Account"><ReviewField label="Email" value={reg.email} /><ReviewField label="Account type" value="Startup" /></ReviewSection>
-        <ReviewSection title="Startup Basics"><ReviewField label="Name" value={reg.startupName} /><ReviewField label="Sector" value={reg.sector} /><ReviewField label="Country" value={reg.country} /><ReviewField label="Team size" value={reg.teamSize} /></ReviewSection>
+        <ReviewSection title="Startup Basics"><ReviewField label="Name" value={reg.startupName} /><ReviewField label="Sector" value={resolveStartupSector(reg)} /><ReviewField label="Custom sector" value={reg.sector === 'Other' ? reg.customSector : ''} /><ReviewField label="Country" value={reg.country} /><ReviewField label="Team size" value={reg.teamSizeRange} /></ReviewSection>
         <ReviewSection title="Product & Stage"><ReviewField label="Stage" value={reg.stage} /><ReviewField label="Problem" value={reg.problemStatement} /><ReviewField label="Product" value={reg.productDescription} /><ReviewField label="Traction" value={reg.tractionLevel} />{reg.tractionDetail && <ReviewField label="Traction details" value={reg.tractionDetail} />}</ReviewSection>
-        <ReviewSection title="Needs"><ReviewField label="Support needs" value={reg.supportNeeds} /><ReviewField label="Challenges" value={reg.currentChallenges} /></ReviewSection>
+        <ReviewSection title="Needs"><ReviewField label="Support needs" value={mergeValues(reg.supportNeeds, reg.customSupportNeeds)} /><ReviewField label="Custom support needs" value={reg.customSupportNeeds} /><ReviewField label="Challenges" value={mergeValues(reg.currentChallenges, reg.customChallenges)} /><ReviewField label="Custom challenges" value={reg.customChallenges} /></ReviewSection>
         <div className="dev-note">Public registrations start as pending. Programme records are created later by approved organisation accounts.</div>
       </>
     );
@@ -365,25 +446,38 @@ export default function LoginPage({ authError }) {
         <h3 className="wizard-section-title">Contributor Info</h3>
         <label>Full name<input value={reg.contributorName} onChange={(e) => up('contributorName', e.target.value)} required /></label>
         <label>Primary contributor type
-          <select value={reg.contributorType} onChange={(e) => up('contributorType', e.target.value)} required>
-            <option value="">Select type</option>
-            {CONTRIBUTOR_TYPE_OPTIONS.map((type) => <option key={type}>{type}</option>)}
-          </select>
+          <SearchableSelect options={CONTRIBUTOR_TYPE_OPTIONS} value={reg.contributorType} onChange={(value) => { up('contributorType', value); up('primaryContributorType', value); }} placeholder="Select contributor type" />
         </label>
-        <FieldHelper text="This determines which fields are shown and how you appear in recommendations." />
+        <FieldHelper text="Choose the main identity you want to register under. You can refine operations after approval." />
       </>
     );
 
     if (step === 2) return (
       <>
         <h3 className="wizard-section-title">Expertise & Coverage</h3>
-        <label>Sector expertise</label>
-        <FieldHelper text="Select the industries and skill areas where you can add value." />
-        <MultiSelect options={SECTOR_EXPERTISE_OPTIONS} value={reg.sectorExpertise} onChange={(value) => up('sectorExpertise', value)} />
+        <label>Expertise</label>
+        <FieldHelper text="Select expertise areas and add custom expertise if needed." />
+        <CustomMultiSelectField
+          options={SECTOR_EXPERTISE_OPTIONS}
+          selected={reg.sectorExpertise}
+          customValues={reg.customExpertise}
+          onSelectedChange={(value) => up('sectorExpertise', value)}
+          onCustomChange={(value) => up('customExpertise', value)}
+          placeholder="Select or add custom expertise"
+        />
         <label style={{ marginTop: 12 }}>Supported stages</label>
-        <MultiSelect options={SUPPORTED_STAGE_OPTIONS} value={reg.supportedStages} onChange={(value) => up('supportedStages', value)} columns={3} />
+        <SearchableMultiSelect options={SUPPORTED_STAGE_OPTIONS} value={reg.supportedStages} onChange={(value) => up('supportedStages', value)} placeholder="Select supported stages" />
         <label style={{ marginTop: 12 }}>Country coverage</label>
-        <MultiSelect options={COUNTRY_OPTIONS} value={reg.countryCoverage} onChange={(value) => up('countryCoverage', value)} columns={4} />
+        <SearchableMultiSelect options={COUNTRY_COVERAGE_OPTIONS} value={reg.countryCoverage} onChange={(value) => up('countryCoverage', value)} placeholder="Select countries or Global / Remote" />
+        <label style={{ marginTop: 12 }}>Support areas</label>
+        <CustomMultiSelectField
+          options={SUPPORT_AREA_OPTIONS}
+          selected={reg.supportAreas}
+          customValues={reg.customSupportAreas}
+          onSelectedChange={(value) => up('supportAreas', value)}
+          onCustomChange={(value) => up('customSupportAreas', value)}
+          placeholder="Select or add custom support areas"
+        />
         {reg.contributorType === 'Investor / Funder' && (
           <>
             <label style={{ marginTop: 12 }}>Investment thesis<input value={reg.investmentThesis} onChange={(e) => up('investmentThesis', e.target.value)} placeholder="AI, SaaS, Healthtech" /></label>
@@ -391,29 +485,8 @@ export default function LoginPage({ authError }) {
           </>
         )}
         {reg.contributorType === 'Professional Service Provider' && (
-          <>
-            <label style={{ marginTop: 12 }}>Support areas offered</label>
-            <MultiSelect options={SUPPORT_AREA_OPTIONS} value={reg.supportAreas} onChange={(value) => up('supportAreas', value)} />
-          </>
+          <FieldHelper text="You can add detailed delivery and capacity settings after account approval." />
         )}
-      </>
-    );
-
-    if (step === 3) return (
-      <>
-        <h3 className="wizard-section-title">Capacity</h3>
-        <label>Availability
-          <select value={reg.availability} onChange={(e) => up('availability', e.target.value)}>
-            <option>Available</option>
-            <option>Limited</option>
-            <option>Unavailable</option>
-          </select>
-        </label>
-        <div className="auth-form-grid auth-form-grid-three">
-          <label>Max programmes<input type="number" min="1" value={reg.globalMaxProgrammes} onChange={(e) => up('globalMaxProgrammes', e.target.value)} /></label>
-          <label>Max startups<input type="number" min="1" value={reg.globalMaxStartupAssignments} onChange={(e) => up('globalMaxStartupAssignments', e.target.value)} /></label>
-          <label>Per programme<input type="number" min="1" value={reg.perProgrammeStartupCapacity} onChange={(e) => up('perProgrammeStartupCapacity', e.target.value)} /></label>
-        </div>
       </>
     );
 
@@ -421,9 +494,8 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Review your contributor profile</h3>
         <ReviewSection title="Account"><ReviewField label="Email" value={reg.email} /><ReviewField label="Account type" value="Contributor" /></ReviewSection>
-        <ReviewSection title="Contributor Info"><ReviewField label="Name" value={reg.contributorName} /><ReviewField label="Type" value={reg.contributorType} /></ReviewSection>
-        <ReviewSection title="Expertise & Coverage"><ReviewField label="Sector expertise" value={reg.sectorExpertise} /><ReviewField label="Stages" value={reg.supportedStages} /><ReviewField label="Countries" value={reg.countryCoverage} />{reg.contributorType === 'Investor / Funder' && <><ReviewField label="Investment thesis" value={reg.investmentThesis} /><ReviewField label="Ticket size" value={reg.ticketSize} /></>}{reg.contributorType === 'Professional Service Provider' && <ReviewField label="Support areas" value={reg.supportAreas} />}</ReviewSection>
-        <ReviewSection title="Capacity"><ReviewField label="Availability" value={reg.availability} /><ReviewField label="Max programmes" value={reg.globalMaxProgrammes} /><ReviewField label="Max startups" value={reg.globalMaxStartupAssignments} /><ReviewField label="Per programme" value={reg.perProgrammeStartupCapacity} /></ReviewSection>
+        <ReviewSection title="Contributor Info"><ReviewField label="Name" value={reg.contributorName} /><ReviewField label="Primary type" value={reg.contributorType} /></ReviewSection>
+        <ReviewSection title="Expertise & Coverage"><ReviewField label="Expertise" value={mergeValues(reg.sectorExpertise, reg.customExpertise)} /><ReviewField label="Custom expertise" value={reg.customExpertise} /><ReviewField label="Stages" value={reg.supportedStages} /><ReviewField label="Countries" value={reg.countryCoverage} /><ReviewField label="Support areas" value={mergeValues(reg.supportAreas, reg.customSupportAreas)} /><ReviewField label="Custom support areas" value={reg.customSupportAreas} />{reg.contributorType === 'Investor / Funder' && <><ReviewField label="Investment thesis" value={reg.investmentThesis} /><ReviewField label="Ticket size" value={reg.ticketSize} /></>}</ReviewSection>
         <div className="dev-note">Public registrations start as pending. Programme records are created later by approved organisation accounts.</div>
       </>
     );
@@ -436,18 +508,16 @@ export default function LoginPage({ authError }) {
         <label>Organisation name<input value={reg.organisationName} onChange={(e) => up('organisationName', e.target.value)} required /></label>
         <div className="auth-form-grid">
           <label>Organisation type
-            <select value={reg.organisationType} onChange={(e) => up('organisationType', e.target.value)} required>
-              <option value="">Select type</option>
-              {ORG_TYPE_OPTIONS.map((type) => <option key={type}>{type}</option>)}
-            </select>
+            <SearchableSelect options={ORG_TYPE_OPTIONS} value={reg.organisationType} onChange={(value) => up('organisationType', value)} placeholder="Select type" />
           </label>
           <label>Country
-            <select value={reg.country} onChange={(e) => up('country', e.target.value)} required>
-              {COUNTRY_OPTIONS.map((country) => <option key={country}>{country}</option>)}
-            </select>
+            <SearchableSelect options={COUNTRY_OPTIONS} value={reg.country} onChange={(value) => up('country', value)} placeholder="Search country" />
           </label>
         </div>
-        <FieldHelper text="How your organisation participates in the startup ecosystem." />
+        {reg.organisationType === 'Other' && (
+          <label>Custom organisation type<input value={reg.customOrganisationType} onChange={(e) => up('customOrganisationType', e.target.value)} placeholder="Describe your organisation type" required /></label>
+        )}
+        <FieldHelper text="Organisation roles are configured internally after approval." />
       </>
     );
 
@@ -455,10 +525,24 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Ecosystem Scope</h3>
         <label>Focus sectors</label>
-        <FieldHelper text="The industries your programmes and partnerships target." />
-        <MultiSelect options={FOCUS_SECTOR_OPTIONS} value={reg.focusSectors} onChange={(value) => up('focusSectors', value)} />
+        <FieldHelper text="Select focus sectors and add custom sectors if needed." />
+        <CustomMultiSelectField
+          options={FOCUS_SECTOR_OPTIONS}
+          selected={reg.focusSectors}
+          customValues={reg.customFocusSectors}
+          onSelectedChange={(value) => up('focusSectors', value)}
+          onCustomChange={(value) => up('customFocusSectors', value)}
+          placeholder="Select or add custom focus sectors"
+        />
         <label style={{ marginTop: 12 }}>Main support areas</label>
-        <MultiSelect options={SUPPORT_AREA_OPTIONS} value={reg.supportAreas} onChange={(value) => up('supportAreas', value)} />
+        <CustomMultiSelectField
+          options={SUPPORT_AREA_OPTIONS}
+          selected={reg.mainSupportAreas}
+          customValues={reg.customMainSupportAreas}
+          onSelectedChange={(value) => up('mainSupportAreas', value)}
+          onCustomChange={(value) => up('customMainSupportAreas', value)}
+          placeholder="Select or add custom support areas"
+        />
       </>
     );
 
@@ -466,8 +550,8 @@ export default function LoginPage({ authError }) {
       <>
         <h3 className="wizard-section-title">Review your organisation profile</h3>
         <ReviewSection title="Account"><ReviewField label="Email" value={reg.email} /><ReviewField label="Account type" value="Organisation" /></ReviewSection>
-        <ReviewSection title="Organisation"><ReviewField label="Name" value={reg.organisationName} /><ReviewField label="Type" value={reg.organisationType} /><ReviewField label="Country" value={reg.country} /></ReviewSection>
-        <ReviewSection title="Ecosystem Scope"><ReviewField label="Focus sectors" value={reg.focusSectors} /><ReviewField label="Support areas" value={reg.supportAreas} /></ReviewSection>
+        <ReviewSection title="Organisation"><ReviewField label="Name" value={reg.organisationName} /><ReviewField label="Type" value={reg.organisationType === 'Other' ? reg.customOrganisationType : reg.organisationType} /><ReviewField label="Custom type" value={reg.organisationType === 'Other' ? reg.customOrganisationType : ''} /><ReviewField label="Country" value={reg.country} /></ReviewSection>
+        <ReviewSection title="Ecosystem Scope"><ReviewField label="Focus sectors" value={mergeValues(reg.focusSectors, reg.customFocusSectors)} /><ReviewField label="Custom focus sectors" value={reg.customFocusSectors} /><ReviewField label="Main support areas" value={mergeValues(reg.mainSupportAreas, reg.customMainSupportAreas)} /><ReviewField label="Custom support areas" value={reg.customMainSupportAreas} /></ReviewSection>
         <div className="dev-note">Public registrations start as pending. Programme records are created later by approved organisation accounts.</div>
       </>
     );

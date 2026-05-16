@@ -1,3 +1,18 @@
+import Select from 'react-select';
+import CreatableSelect from 'react-select/creatable';
+
+const selectStyles = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 42,
+    borderColor: state.isFocused ? 'var(--color-primary-light)' : 'var(--color-border)',
+    boxShadow: state.isFocused ? '0 0 0 2px var(--color-primary-bg)' : 'none',
+    '&:hover': { borderColor: 'var(--color-primary-light)' },
+  }),
+  placeholder: (base) => ({ ...base, color: 'var(--color-text-muted)' }),
+  menu: (base) => ({ ...base, zIndex: 30 }),
+};
+
 export function WizardProgress({ steps, current }) {
   return (
     <div className="wizard-progress">
@@ -35,6 +50,90 @@ export function MultiSelect({ options, value, onChange, columns = 2 }) {
 
 export function FieldHelper({ text }) {
   return <span className="wizard-helper">{text}</span>;
+}
+
+function toOption(value) {
+  return { value, label: value };
+}
+
+export function SearchableSelect({
+  options,
+  value,
+  onChange,
+  placeholder,
+  isClearable = false,
+}) {
+  const selectOptions = options.map(toOption);
+  const selected = value ? toOption(value) : null;
+  return (
+    <Select
+      options={selectOptions}
+      value={selected}
+      onChange={(next) => onChange(next?.value || '')}
+      placeholder={placeholder}
+      isClearable={isClearable}
+      isSearchable
+      styles={selectStyles}
+    />
+  );
+}
+
+export function SearchableMultiSelect({ options, value, onChange, placeholder }) {
+  const selectOptions = options.map(toOption);
+  const selected = (value || []).map(toOption);
+  return (
+    <Select
+      options={selectOptions}
+      value={selected}
+      onChange={(next) => onChange((next || []).map((item) => item.value))}
+      placeholder={placeholder}
+      isMulti
+      isSearchable
+      closeMenuOnSelect={false}
+      styles={selectStyles}
+    />
+  );
+}
+
+export function CustomMultiSelectField({
+  options,
+  selected = [],
+  customValues = [],
+  onSelectedChange,
+  onCustomChange,
+  placeholder,
+}) {
+  const selectOptions = options.map(toOption);
+  const customOptions = customValues.map(toOption);
+  const selectedOptions = selected.map(toOption);
+  const value = [...selectedOptions, ...customOptions];
+
+  function handleChange(nextItems) {
+    const next = nextItems || [];
+    const optionSet = new Set(options);
+    const nextSelected = [];
+    const nextCustom = [];
+    next.forEach((item) => {
+      if (optionSet.has(item.value)) nextSelected.push(item.value);
+      else nextCustom.push(item.value);
+    });
+    onSelectedChange(Array.from(new Set(nextSelected)));
+    onCustomChange(Array.from(new Set(nextCustom)));
+  }
+
+  return (
+    <CreatableSelect
+      options={selectOptions}
+      value={value}
+      onChange={handleChange}
+      placeholder={placeholder}
+      isMulti
+      isSearchable
+      closeMenuOnSelect={false}
+      formatCreateLabel={(inputValue) => `Add custom: ${inputValue}`}
+      styles={selectStyles}
+    />
+  );
 }
 
 export function WizardNav({ step, maxStep, onBack, onContinue, busy, submitLabel }) {

@@ -490,6 +490,47 @@ def _normalise_contributor_types(value) -> list[str]:
     return list(dict.fromkeys(selected)) or ["Mentor"]
 
 
+def _parse_team_size_payload(profile: dict) -> dict:
+    range_value = _clean_string(profile.get("teamSizeRange"))
+    known = bool(profile.get("teamSizeKnown"))
+    min_value = profile.get("teamSizeMin")
+    max_value = profile.get("teamSizeMax")
+
+    if known:
+        team_size_min = _clean_positive_int(min_value, 1)
+        team_size_max = _clean_positive_int(max_value, team_size_min) if max_value is not None else None
+    else:
+        team_size_min = None
+        team_size_max = None
+
+    compatibility_team_size = team_size_min if team_size_min is not None else _clean_positive_int(profile.get("teamSize"), 1)
+    if not range_value:
+        range_value = "Prefer not to say" if not known else str(profile.get("teamSize") or "")
+
+    return {
+        "teamSizeRange": range_value or "Prefer not to say",
+        "teamSizeMin": team_size_min,
+        "teamSizeMax": team_size_max,
+        "teamSizeKnown": known,
+        "teamSize": compatibility_team_size,
+    }
+
+
+def _map_primary_contributor_type(raw_type: str) -> tuple[str, str]:
+    mapping = {
+        "Mentor / Advisor": ("Mentor", "mentor"),
+        "Investor / Funder": ("Investor", "investor"),
+        "Corporate Partner": ("Partner", "partner"),
+        "Technology / Infrastructure Provider": ("Service Provider", "service_provider"),
+        "Professional Service Provider": ("Service Provider", "service_provider"),
+        "Government / Public Agency": ("Partner", "partner"),
+        "Academic / Research Institution": ("Partner", "partner"),
+        "Community / Network Partner": ("Partner", "partner"),
+        "Programme Delivery Partner": ("Partner", "partner"),
+    }
+    return mapping.get(raw_type, ("", ""))
+
+
 def _registration_account(
     uid: str,
     account_type: str,
@@ -547,6 +588,24 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         entity_id = f"comp-{uid}"
         display_name = _require_profile_name(profile, "name", "startupName", "companyName")
         sector = _clean_string(profile.get("sector") or profile.get("industry"))
+        if not sector:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="Startup sector is required.",
+            )
+        support_needs = _clean_string_list(profile.get("supportNeeds"))
+        current_challenges = _clean_string_list(profile.get("currentChallenges"))
+        if not support_needs:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="At least one startup support need is required.",
+            )
+        if not current_challenges:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="At least one startup challenge is required.",
+            )
+        team_size_payload = _parse_team_size_payload(profile)
         entity_payload = {
             "id": entity_id,
             "authUid": uid,
@@ -555,14 +614,21 @@ def complete_entity_registration(req: https_fn.CallableRequest):
             "companyName": display_name,
             "sector": sector,
             "industry": sector,
+            "customSector": _clean_string(profile.get("customSector")),
             "stage": _clean_string(profile.get("stage"), "MVP"),
             "country": _clean_string(profile.get("country"), "Malaysia"),
-            "teamSize": _clean_positive_int(profile.get("teamSize"), 1),
+            "teamSize": team_size_payload["teamSize"],
+            "teamSizeRange": team_size_payload["teamSizeRange"],
+            "teamSizeMin": team_size_payload["teamSizeMin"],
+            "teamSizeMax": team_size_payload["teamSizeMax"],
+            "teamSizeKnown": team_size_payload["teamSizeKnown"],
             "problemStatement": _clean_string(profile.get("problemStatement")),
             "productDescription": _clean_string(profile.get("productDescription")),
-            "supportNeeds": _clean_string_list(profile.get("supportNeeds")),
+            "supportNeeds": support_needs,
+            "customSupportNeeds": _clean_string_list(profile.get("customSupportNeeds")),
             "traction": _clean_string(profile.get("traction")),
-            "currentChallenges": _clean_string_list(profile.get("currentChallenges")),
+            "currentChallenges": current_challenges,
+            "customChallenges": _clean_string_list(profile.get("customChallenges")),
             "verificationStatus": "Pending",
             "createdAt": firestore.SERVER_TIMESTAMP,
         }
@@ -571,33 +637,42 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         entity_type = "contributor"
         entity_id = f"cont-{uid}"
         display_name = _require_profile_name(profile, "name", "contributorName")
-        contributor_types = _normalise_contributor_types(profile.get("contributorTypes"))
-        contributor_primary_type = contributor_types[0] if contributor_types else "Mentor"
-        role_from_type = {
-            "Mentor": "mentor",
-            "Partner": "partner",
-            "Investor": "investor",
-            "Service Provider": "service_provider",
-        }.get(contributor_primary_type, "mentor")
-        role_key = requested_role_key if requested_role_key in CONTRIBUTOR_ROLE_KEYS else role_from_type
+        primary_contributor_type = _clean_string(profile.get("primaryContributorType"))
+        normalised_type, role_from_type = _map_primary_contributor_type(primary_contributor_type)
+        if not normalised_type:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="Primary contributor type is required.",
+            )
+        role_key = requested_role_key if requested_role_key == role_from_type else role_from_type
+        expertise = _clean_string_list(profile.get("expertise"))
+        supported_stages = _clean_string_list(profile.get("supportedStages"))
+        country_coverage = _clean_string_list(profile.get("countryCoverage")) or [_clean_string(profile.get("country"), "Malaysia")]
+        support_areas = _clean_string_list(profile.get("canSupport") or profile.get("supportAreas"))
+        if not expertise or not supported_stages or not country_coverage or not support_areas:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="Contributor expertise, supported stages, country coverage, and support areas are required.",
+            )
         entity_payload = {
             "id": entity_id,
             "authUid": uid,
             "organisationId": f"org-contrib-{uid}",
             "name": display_name,
-            "contributorTypes": contributor_types,
-            "expertise": _clean_string_list(profile.get("expertise")),
-            "supportedStages": _clean_string_list(profile.get("supportedStages")),
+            "primaryContributorType": primary_contributor_type,
+            "contributorTypes": [normalised_type],
+            "expertise": expertise,
+            "customExpertise": _clean_string_list(profile.get("customExpertise")),
+            "supportedStages": supported_stages,
             "investmentThesis": _clean_string_list(profile.get("investmentThesis")),
             "ticketSize": _clean_string(profile.get("ticketSize")),
-            "countryCoverage": _clean_string_list(profile.get("countryCoverage")) or [_clean_string(profile.get("country"), "Malaysia")],
-            "canSupport": _clean_string_list(profile.get("canSupport")),
-            "capacity": {
-                "globalMaxProgrammes": _clean_positive_int(profile.get("globalMaxProgrammes"), 1),
-                "globalMaxStartupAssignments": _clean_positive_int(profile.get("globalMaxStartupAssignments"), 3),
-                "perProgrammeStartupCapacity": _clean_positive_int(profile.get("perProgrammeStartupCapacity"), 1),
-            },
-            "availability": _clean_string(profile.get("availability"), "Available"),
+            "countryCoverage": country_coverage,
+            "canSupport": support_areas,
+            "supportAreas": support_areas,
+            "customSupportAreas": _clean_string_list(profile.get("customSupportAreas")),
+            "availabilityConfigured": False,
+            "capacityConfigured": False,
+            "capacity": {},
             "status": "Pending",
             "rating": 0,
             "createdAt": firestore.SERVER_TIMESTAMP,
@@ -608,14 +683,32 @@ def complete_entity_registration(req: https_fn.CallableRequest):
         entity_type = "organisation"
         entity_id = f"org-{uid}"
         display_name = _require_profile_name(profile, "name", "organisationName")
+        organisation_type = _clean_string(profile.get("organisationType"))
+        if not organisation_type:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="Organisation type is required.",
+            )
+        focus_areas = _clean_string_list(profile.get("focusAreas") or profile.get("focusSectors"))
+        main_support_areas = _clean_string_list(profile.get("mainSupportAreas") or profile.get("supportAreas"))
+        if not focus_areas or not main_support_areas:
+            raise https_fn.HttpsError(
+                code=https_fn.FunctionsErrorCode.INVALID_ARGUMENT,
+                message="Organisation focus sectors and main support areas are required.",
+            )
         entity_payload = {
             "id": entity_id,
             "authUid": uid,
             "name": display_name,
-            "organisationType": _clean_string(profile.get("organisationType"), "Programme Owner"),
-            "roles": _clean_string_list(profile.get("roles")) or ["Programme Owner"],
+            "organisationType": organisation_type,
+            "customOrganisationType": _clean_string(profile.get("customOrganisationType")),
             "country": _clean_string(profile.get("country"), "Malaysia"),
-            "focusAreas": _clean_string_list(profile.get("focusAreas")),
+            "focusSectors": _clean_string_list(profile.get("focusSectors")) or focus_areas,
+            "customFocusSectors": _clean_string_list(profile.get("customFocusSectors")),
+            "mainSupportAreas": main_support_areas,
+            "customMainSupportAreas": _clean_string_list(profile.get("customMainSupportAreas")),
+            "supportAreas": main_support_areas,
+            "focusAreas": focus_areas,
             "status": "Pending",
             "createdAt": firestore.SERVER_TIMESTAMP,
         }
@@ -1657,8 +1750,12 @@ def _eligibility_score(startup: dict, programme: dict) -> tuple[float, list[str]
         rules = [rules]
     rules_text = " ".join(rules).lower()
 
-    team_size = startup.get("teamSize", 0)
-    if ("team of at least 2" in rules_text or "team of 2" in rules_text) and team_size < 2:
+    team_size_known = bool(startup.get("teamSizeKnown"))
+    team_size_min = startup.get("teamSizeMin")
+    if team_size_min is None:
+        team_size_min = startup.get("teamSize", 0)
+    team_size_min = _clean_positive_int(team_size_min, 0)
+    if ("team of at least 2" in rules_text or "team of 2" in rules_text) and (not team_size_known or team_size_min < 2):
         score -= 10
         risks.append("Startup team size is below the programme minimum.")
 
