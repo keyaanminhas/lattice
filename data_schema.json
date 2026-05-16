@@ -1,0 +1,156 @@
+{
+  "organisations": {
+    "description": "Ecosystem owners or programme-owning organisations that govern programmes and contributor approvals.",
+    "schema": {
+      "id": "string",
+      "name": "string",
+      "organisationType": "string",
+      "roles": ["string"],
+      "country": "string",
+      "focusAreas": ["string"],
+      "status": "string ('Active', 'Pending', 'Suspended')",
+      "createdAt": "timestamp"
+    }
+  },
+  "programmes": {
+    "description": "The core operational unit. Startups apply to programmes, contributors join pools, and relationships are governed inside programme context.",
+    "schema": {
+      "id": "string",
+      "organisationId": "string",
+      "name": "string",
+      "type": "string",
+      "targetSectors": ["string"],
+      "targetStages": ["string"],
+      "country": "string",
+      "region": "string (optional)",
+      "eligibilityRules": ["string"],
+      "expectedOutcomes": ["string"],
+      "status": "string ('Open', 'Active', 'Closed', 'Draft')",
+      "createdAt": "timestamp"
+    }
+  },
+  "companies": {
+    "description": "Startup or company profiles applying for programme support.",
+    "schema": {
+      "id": "string",
+      "organisationId": "string",
+      "name": "string",
+      "sector": "string",
+      "industry": "string",
+      "stage": "string",
+      "country": "string",
+      "teamSize": "number",
+      "problemStatement": "string",
+      "productDescription": "string",
+      "supportNeeds": ["string"],
+      "traction": "string",
+      "currentChallenges": ["string"],
+      "verificationStatus": "string ('Verified', 'Pending', 'Rejected')",
+      "embeddingVector": ["number"],
+      "createdAt": "timestamp"
+    }
+  },
+  "contributors": {
+    "description": "Unified contributor profiles used for mentors, partners, investors, and service providers.",
+    "schema": {
+      "id": "string",
+      "organisationId": "string",
+      "name": "string",
+      "contributorTypes": ["string ('Mentor', 'Partner', 'Investor', 'Service Provider')"],
+      "expertise": ["string"],
+      "supportedStages": ["string"],
+      "investmentThesis": ["string"],
+      "ticketSize": "string",
+      "countryCoverage": ["string"],
+      "canSupport": ["string"],
+      "capacity": {
+        "globalMaxProgrammes": "number",
+        "globalMaxStartupAssignments": "number",
+        "perProgrammeStartupCapacity": "number"
+      },
+      "availability": "string ('Available', 'Limited', 'Unavailable')",
+      "status": "string ('Verified', 'Pending')",
+      "rating": "number",
+      "embeddingVector": ["number"],
+      "createdAt": "timestamp"
+    }
+  },
+  "applications": {
+    "description": "Startup applications or admissions into programmes.",
+    "schema": {
+      "id": "string",
+      "startupId": "string",
+      "programmeId": "string",
+      "aiFitScore": "number",
+      "aiExplanation": "string",
+      "status": "string ('Pending Admin Review', 'Accepted', 'Rejected')",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    }
+  },
+  "programmeContributors": {
+    "description": "Approved contributor assignments to specific programme pools.",
+    "schema": {
+      "id": "string",
+      "programmeId": "string",
+      "contributorId": "string",
+      "contributorType": "string",
+      "status": "string ('Pending Approval', 'Approved', 'Rejected')",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    }
+  },
+  "recommendations": {
+    "description": "AI-generated suggestions waiting for human review before becoming active relationships or assignments.",
+    "schema": {
+      "id": "string",
+      "recommendationType": "string ('Startup-to-Programme', 'Mentor-to-Programme', 'Partner-to-Programme', 'Investor-to-Programme', 'Service Provider-to-Programme', 'Startup-to-Mentor')",
+      "sourceEntityType": "string",
+      "sourceEntityId": "string",
+      "targetEntityType": "string",
+      "targetEntityId": "string",
+      "programmeId": "string",
+      "matchScore": "number",
+      "explanation": "string",
+      "riskFlags": ["string"],
+      "status": "string ('Pending Approval', 'Approved', 'Rejected')",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    }
+  },
+  "relationships": {
+    "description": "Approved, trackable ecosystem linkages within a programme context.",
+    "schema": {
+      "id": "string",
+      "relationshipType": "string ('Startup-to-Programme', 'Mentor-to-Programme', 'Partner-to-Programme', 'Investor-to-Programme', 'Service Provider-to-Programme', 'Startup-to-Mentor')",
+      "sourceEntityId": "string",
+      "targetEntityId": "string",
+      "programmeId": "string",
+      "createdFromRecommendationId": "string",
+      "matchScore": "number",
+      "status": "string ('Approved', 'Active', 'Needs Review', 'Completed', 'Rejected', 'Expired')",
+      "expectedOutcome": "string",
+      "startDate": "string",
+      "endDate": "string or null",
+      "createdAt": "timestamp",
+      "updatedAt": "timestamp"
+    }
+  },
+  "outcomes": {
+    "description": "Structured engagement outcomes used for the AI learning loop.",
+    "schema": {
+      "id": "string",
+      "relationshipId": "string",
+      "outcomeAchieved": "string ('Yes', 'Partial', 'No')",
+      "relationshipQuality": "string ('High', 'Medium', 'Low')",
+      "startupRating": "number",
+      "startupFeedback": "string",
+      "contributorRating": "number",
+      "contributorFeedback": "string",
+      "adminEvaluation": "string",
+      "aiLesson": "string",
+      "reusePattern": "boolean",
+      "createdAt": "timestamp"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "applications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "startupId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "programmeContributors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "programmeContributors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "contributorId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recommendations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recommendationType", "mode": "ASCENDING" },
+        { "fieldPath": "sourceEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "relationshipType", "mode": "ASCENDING" },
+        { "fieldPath": "sourceEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "relationshipType", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
