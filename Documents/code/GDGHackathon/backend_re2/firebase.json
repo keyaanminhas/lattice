@@ -1,0 +1,75 @@
+{
+  "firestore": [
+    {
+      "database": "(default)",
+      "location": "asia-southeast1",
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
+    },
+    {
+      "database": "rbac-new-db",
+      "location": "asia-southeast1",
+      "rules": "firestore.rbac.rules",
+      "indexes": "firestore.rbac.indexes.json"
+    }
+  ],
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "venv",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "runtime": "python314"
+    },
+    {
+      "source": "rbac-functions",
+      "codebase": "rbac-isolated",
+      "runtime": "nodejs20",
+      "ignore": [
+        "node_modules",
+        "test",
+        ".env",
+        ".env.*"
+      ],
+      "predeploy": [
+        "npm --prefix rbac run sync:functions-clone",
+        "npm --prefix \"$RESOURCE_DIR\" install --omit=dev"
+      ],
+      "environmentVariables": {
+        "RBAC_FIRESTORE_DATABASE": "rbac-new-db",
+        "USE_GRAPH_RAG": "true",
+        "PERSIST_EMBEDDINGS": "false",
+        "USE_GEMINI_EMBEDDINGS": "false",
+        "USE_GEMINI_SUMMARIES": "true",
+        "GEMINI_TEXT_MODEL": "gemini-1.5-flash"
+      }
+    }
+  ],
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "functions": {
+      "port": 5001
+    },
+    "firestore": {
+      "port": 8080
+    },
+    "storage": {
+      "port": 9199
+    },
+    "ui": {
+      "enabled": true
+    },
+    "singleProjectMode": true
+  }
+}

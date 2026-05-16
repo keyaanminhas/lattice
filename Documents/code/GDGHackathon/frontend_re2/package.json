@@ -1,0 +1,30 @@
+{
+  "name": "lattice-frontend-re2",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "seed:demo": "cd ../backend_re2/rbac && npm run seed:demo-users",
+    "lint": "next lint",
+    "check:routes": "node scripts/check-routes.mjs",
+    "check:routes:authed": "node scripts/check-routes-authed.mjs"
+  },
+  "dependencies": {
+    "firebase": "^11.6.0",
+    "framer-motion": "^12.9.2",
+    "next": "^15.3.2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3"
+  }
+}

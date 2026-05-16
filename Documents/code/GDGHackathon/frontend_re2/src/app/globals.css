@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --lattice-navy: #0b1f3a;
+  --lattice-primary: #1e4d8c;
+  --lattice-electric: #2b7bff;
+  --lattice-accent: #8ec5ff;
+  --lattice-ink: #0f2745;
+  --lattice-surface: #f4f7fb;
+  --lattice-surface-strong: #ecf2f9;
+  --lattice-border: #d0dae6;
+}
+
+html,
+body {
+  @apply bg-white text-lattice-navy antialiased;
+}
+
+body {
+  background:
+    radial-gradient(circle at top left, rgba(77, 163, 255, 0.16), transparent 28%),
+    radial-gradient(circle at top right, rgba(30, 77, 140, 0.08), transparent 24%),
+    linear-gradient(180deg, #f7faff 0%, #f2f6fb 38%, #ffffff 100%);
+}
+
+::selection {
+  background: rgba(43, 123, 255, 0.18);
+  color: var(--lattice-ink);
+}
+
+@layer components {
+  .lattice-panel {
+    @apply rounded-2xl border border-white/70 bg-white/90 shadow-panel backdrop-blur-sm;
+  }
+
+  .lattice-btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl bg-gradient-to-r from-lattice-primary to-lattice-electric px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:-translate-y-px hover:opacity-95 disabled:translate-y-0 disabled:opacity-50;
+  }
+
+  .lattice-btn-ghost {
+    @apply inline-flex items-center justify-center rounded-xl border border-lattice-border/80 bg-white/90 px-4 py-2 text-sm font-medium text-lattice-deep transition hover:border-lattice-electric/30 hover:bg-lattice-surface;
+  }
+
+  .lattice-data-grid {
+    @apply w-full border-separate border-spacing-0 text-left text-xs;
+  }
+
+  .lattice-data-grid th {
+    @apply border-b border-lattice-border bg-lattice-surface/80 px-3 py-3 font-semibold uppercase tracking-[0.16em] text-lattice-deep/70;
+  }
+
+  .lattice-data-grid td {
+    @apply border-b border-lattice-border/60 bg-white/85 px-3 py-3;
+  }
+
+  .lattice-kpi-card {
+    @apply rounded-2xl border border-white/80 bg-white/90 px-4 py-4 shadow-panel;
+  }
+
+  .lattice-subtle-grid {
+    background-image:
+      linear-gradient(rgba(208, 218, 230, 0.25) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(208, 218, 230, 0.25) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "lattice-rbac-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lattice RBAC backend: clone tooling, Auth claims, Cloud Functions",
+  "type": "module",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "clone": "node cloneDB.js",
+    "clone:dry-run": "node cloneDB.js --dry-run",
+    "clone:emulator": "cross-env USE_FIRESTORE_EMULATOR=true FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=lattice-2026 node cloneDB.js",
+    "clone:emulator:dry-run": "cross-env USE_FIRESTORE_EMULATOR=true FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 GOOGLE_CLOUD_PROJECT=lattice-2026 node cloneDB.js --dry-run",
+    "clone:production": "cross-env USE_FIRESTORE_EMULATOR=false GOOGLE_CLOUD_PROJECT=lattice-2026 node cloneDB.js --force-target",
+    "bootstrap:platform-admin": "node scripts/bootstrapPlatformAdmin.js",
+    "patch:database": "node scripts/patchRbacDatabase.js",
+    "seed:phase4": "node scripts/seedPhase4Data.js",
+    "test": "npm run test:unit && npm run test:ai && npm run test:router",
+    "test:router": "node --test test/integration/phase5-6.router.test.js test/integration/actions.coverage.test.js",
+    "test:unit": "npm run test:transform && npm run test:auth",
+    "test:ai": "node --test --test-force-exit test/ai/**/*.test.js",
+    "test:phase3": "node --test test/integration/phase3.test.js",
+    "test:phase3:emulator": "cross-env USE_FIRESTORE_EMULATOR=true FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 GOOGLE_CLOUD_PROJECT=lattice-2026 node --test test/integration/phase3.test.js",
+    "test:phase4": "node --test test/integration/phase4.test.js",
+    "test:phase4:emulator": "cross-env USE_FIRESTORE_EMULATOR=true FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 node --test test/integration/phase4.test.js",
+    "test:phase5": "node --test test/integration/phase5.test.js",
+    "sync:functions-clone": "node scripts/syncFunctionsClone.js",
+    "rebuild:graph": "node scripts/rebuildGraphRag.js",
+    "test:graph:emulator": "cross-env USE_FIRESTORE_EMULATOR=true FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 node --test test/ai/graph.test.js",
+    "test:transform": "node --test test/transform.test.js",
+    "test:auth": "node --test test/auth.middleware.test.js",
+    "test:rules": "node --test test/firestore.rules.test.js",
+    "test:rules:emulator": "cross-env FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 node --test test/firestore.rules.test.js",
+    "setup:database": "node scripts/print-setup-instructions.js",
+    "predeploy": "npm run test && npm run sync:functions-clone",
+    "deploy:live": "npm run predeploy && cd .. && npx firebase deploy --only firestore:rbac-new-db,functions:rbac-isolated",
+    "smoke:live": "node scripts/smokeLive.js",
+    "setup:gemini": "node scripts/printGeminiSetup.js",
+    "ops:live": "npm run patch:database && npm run rebuild:graph"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "firebase-admin": "^13.4.0",
+    "firebase-functions": "^6.3.2"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "cross-env": "^7.0.3"
+  }
+}

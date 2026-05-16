@@ -1,0 +1,240 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function role() {
+      return isSignedIn() ? request.auth.token.role : '';
+    }
+
+    function orgId() {
+      return isSignedIn() && request.auth.token.orgId != null
+        ? request.auth.token.orgId
+        : '';
+    }
+
+    function programmeId() {
+      return isSignedIn() && request.auth.token.programmeId != null
+        ? request.auth.token.programmeId
+        : '';
+    }
+
+    function entityId() {
+      return isSignedIn() && request.auth.token.entityId != null
+        ? request.auth.token.entityId
+        : '';
+    }
+
+    function isPlatformAdmin() {
+      return role() == 'platform_admin';
+    }
+
+    function isOrgAdmin() {
+      return role() == 'org_admin';
+    }
+
+    function isProgrammeAdmin() {
+      return role() == 'programme_admin';
+    }
+
+    function isStartup() {
+      return role() == 'startup';
+    }
+
+    function isContributor() {
+      return role() in ['mentor', 'partner', 'investor', 'service_provider'];
+    }
+
+    function isAnyAdmin() {
+      return isPlatformAdmin() || isOrgAdmin() || isProgrammeAdmin();
+    }
+
+    function orgMatches(targetOrgId) {
+      return isPlatformAdmin() || (isOrgAdmin() && orgId() == targetOrgId);
+    }
+
+    function programmeMatches(targetProgrammeId) {
+      return isPlatformAdmin()
+        || (isProgrammeAdmin() && programmeId() == targetProgrammeId)
+        || (isOrgAdmin() && get(/databases/$(database)/documents/programmes/$(targetProgrammeId)).data.orgId == orgId());
+    }
+
+    // --- users ---
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAnyAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid;
+      allow update: if isSignedIn() && (
+        (request.auth.uid == uid && !isAnyAdmin())
+        || isPlatformAdmin()
+        || (isOrgAdmin() && resource.data.orgId == orgId())
+      );
+      allow delete: if isPlatformAdmin();
+    }
+
+    // --- platform_config (platform admin only) ---
+    match /platform_config/{docId} {
+      allow read: if isPlatformAdmin();
+      allow write: if isPlatformAdmin();
+    }
+
+    // --- org_rules ---
+    match /org_rules/{orgDocId} {
+      allow read: if orgMatches(orgDocId) || isPlatformAdmin();
+      allow write: if orgMatches(orgDocId) || isPlatformAdmin();
+    }
+
+    // --- organisations ---
+    match /organisations/{orgDocId} {
+      allow read: if isSignedIn();
+      allow create: if isPlatformAdmin();
+      allow update: if orgMatches(orgDocId);
+      allow delete: if isPlatformAdmin();
+    }
+
+    // --- programmes ---
+    match /programmes/{progId} {
+      allow read: if isSignedIn();
+      allow create: if isPlatformAdmin()
+        || (isOrgAdmin() && request.resource.data.orgId == orgId());
+      allow update: if programmeMatches(progId)
+        || (isOrgAdmin() && resource.data.orgId == orgId());
+      allow delete: if isPlatformAdmin()
+        || (isOrgAdmin() && resource.data.orgId == orgId());
+    }
+
+    // --- startups ---
+    match /startups/{startupId} {
+      allow read: if isSignedIn() && (
+        isAnyAdmin()
+        || (isStartup() && entityId() == startupId)
+        || isContributor()
+      );
+      allow create: if isSignedIn() && (
+        isPlatformAdmin()
+        || (isStartup() && request.resource.data.authUid == request.auth.uid)
+      );
+      allow update: if isPlatformAdmin()
+        || (isStartup() && entityId() == startupId)
+        || (isOrgAdmin() && resource.data.orgId == orgId());
+      allow delete: if isPlatformAdmin();
+    }
+
+    // --- contributors ---
+    match /contributors/{contributorId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && (
+        isPlatformAdmin()
+        || (isContributor() && request.resource.data.authUid == request.auth.uid)
+      );
+      allow update: if isPlatformAdmin()
+        || (isContributor() && entityId() == contributorId)
+        || (isOrgAdmin() && resource.data.orgId == orgId());
+      allow delete: if isPlatformAdmin();
+    }
+
+    // --- applications ---
+    match /applications/{appId} {
+      allow read: if isSignedIn() && (
+        isAnyAdmin()
+        || (isStartup() && resource.data.startupId == entityId())
+        || programmeMatches(resource.data.programmeId)
+      );
+      allow create: if isStartup()
+        && request.resource.data.startupId == entityId();
+      allow update: if programmeMatches(resource.data.programmeId)
+        || isPlatformAdmin()
+        || (isOrgAdmin() && resource.data.orgId == orgId());
+      allow delete: if isPlatformAdmin();
+    }
+
+    // --- programme contributor pools ---
+    match /programmeContributors/{poolId} {
+      allow read: if isSignedIn();
+      allow write: if isPlatformAdmin()
+        || programmeMatches(
+          request.resource != null
+            ? request.resource.data.programmeId
+            : resource.data.programmeId
+        )
+        || (isOrgAdmin() && get(/databases/$(database)/documents/programmes/$(request.resource != null ? request.resource.data.programmeId : resource.data.programmeId)).data.orgId == orgId());
+    }
+
+    match /org_association_requests/{requestId} {
+      allow read: if isSignedIn() && (
+        isPlatformAdmin()
+        || (isOrgAdmin() && resource.data.orgId == orgId())
+        || (isContributor() && resource.data.contributorId == entityId())
+      );
+      allow create: if isContributor();
+      allow update: if isOrgAdmin() && resource.data.orgId == orgId();
+    }
+
+    match /programmes/{progId}/recommendations/{recId} {
+      allow read: if isAnyAdmin() || programmeMatches(progId);
+      allow write: if false;
+    }
+
+    // --- recommendations (admin read; writes via Cloud Functions) ---
+    match /recommendations/{recId} {
+      allow read: if isAnyAdmin()
+        || (isStartup() && resource.data.sourceEntityId == entityId())
+        || (isContributor() && resource.data.targetEntityId == entityId());
+      allow write: if false;
+    }
+
+    // --- relationships ---
+    match /relationships/{relId} {
+      allow read: if isSignedIn() && (
+        isAnyAdmin()
+        || programmeMatches(resource.data.programmeId)
+        || (isStartup() && (resource.data.sourceEntityId == entityId() || resource.data.targetEntityId == entityId()))
+        || (isContributor() && (resource.data.sourceEntityId == entityId() || resource.data.targetEntityId == entityId()))
+      );
+      allow update: if programmeMatches(resource.data.programmeId) || isPlatformAdmin();
+      allow create, delete: if false;
+    }
+
+    // --- outcomes ---
+    match /outcomes/{outcomeId} {
+      allow read: if isAnyAdmin() || programmeMatches(
+        get(/databases/$(database)/documents/relationships/$(resource.data.relationshipId)).data.programmeId
+      );
+      allow write: if false;
+    }
+
+    // --- role_assignments ---
+    match /role_assignments/{assignmentId} {
+      allow read: if isSignedIn() && (
+        isPlatformAdmin()
+        || (resource.data.uid == request.auth.uid)
+        || (isOrgAdmin() && resource.data.orgId == orgId())
+      );
+      allow write: if isPlatformAdmin()
+        || (isOrgAdmin() && request.resource.data.orgId == orgId());
+    }
+
+    // --- graph / audit (backend-only writes) ---
+    match /graph_edges/{edgeId} {
+      allow read: if isAnyAdmin();
+      allow write: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /_migration_meta/{docId} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

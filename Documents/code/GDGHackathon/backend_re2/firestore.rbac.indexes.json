@@ -1,0 +1,115 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "role", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orgId", "mode": "ASCENDING" },
+        { "fieldPath": "role", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "users",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "role", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "applications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "startupId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "programmeContributors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "programmeContributors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "contributorId", "mode": "ASCENDING" },
+        { "fieldPath": "status", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recommendations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recommendationType", "mode": "ASCENDING" },
+        { "fieldPath": "sourceEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "relationshipType", "mode": "ASCENDING" },
+        { "fieldPath": "sourceEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "relationshipType", "mode": "ASCENDING" },
+        { "fieldPath": "targetEntityId", "mode": "ASCENDING" },
+        { "fieldPath": "programmeId", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "programmeId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "sourceId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "graph_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetId", "mode": "ASCENDING" },
+        { "fieldPath": "edgeType", "mode": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "audit_logs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "createdAt", "mode": "DESCENDING" },
+        { "fieldPath": "action", "mode": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

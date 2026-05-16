@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lattice RBAC Target Database (rbac-new-db)",
+  "description": "Phase 0 target collections. Custom claims mirror users.role + orgId/programmeId at Auth layer (Phase 1).",
+  "collections": {
+    "users": {
+      "description": "Canonical identity + RBAC profile (replaces legacy accounts).",
+      "fields": {
+        "id": "string (Auth uid)",
+        "email": "string",
+        "displayName": "string",
+        "role": "platform_admin | org_admin | programme_admin | startup | mentor | partner | investor | service_provider",
+        "orgId": "string | null (required for org_admin)",
+        "programmeId": "string | null (required for programme_admin)",
+        "entityType": "startup | contributor | organisation | null",
+        "entityId": "string | null",
+        "status": "active | pending | suspended",
+        "legacyRoleKey": "string | null",
+        "legacyAccountType": "string | null"
+      }
+    },
+    "role_assignments": {
+      "description": "Scoped grants; used to derive custom claims and audit history.",
+      "fields": {
+        "id": "string",
+        "uid": "string | null",
+        "role": "string",
+        "scopeType": "organisation | programme | self",
+        "scopeId": "string",
+        "orgId": "string | null",
+        "programmeId": "string | null",
+        "status": "active | unassigned | revoked"
+      }
+    },
+    "organisations": { "replaces": "organisations (same id)" },
+    "programmes": {
+      "note": "organisationId renamed to orgId"
+    },
+    "startups": {
+      "replaces": "companies",
+      "note": "Same document ids preserved"
+    },
+    "contributors": {
+      "note": "Adds explicit role field from contributorTypes"
+    },
+    "applications": {},
+    "programmeContributors": {},
+    "recommendations": {},
+    "relationships": {},
+    "outcomes": {},
+    "graph_edges": {},
+    "platform_config": {
+      "description": "Global categories, AI thresholds, feature flags (platform_admin only).",
+      "documentId": "global"
+    },
+    "org_rules": {
+      "description": "Per-organisation policy config (org_admin scoped).",
+      "fields": {
+        "orgId": "string",
+        "verificationRequired": "boolean",
+        "contributorApprovalMode": "string",
+        "aiSuggestionsEnabled": "boolean"
+      }
+    },
+    "audit_logs": {
+      "description": "Platform audit trail (read platform_admin; writes via Admin SDK only)."
+    },
+    "_migration_meta": {
+      "description": "Clone audit trail written only by cloneDB.js"
+    }
+  },
+  "roleMapping": {
+    "organisation_admin": "org_admin",
+    "organization_admin": "org_admin",
+    "companies": "startups",
+    "accounts": "users"
+  }
+}

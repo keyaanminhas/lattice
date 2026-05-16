@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="Lattice">
+  <g fill="#4DA3FF">
+    <circle cx="12" cy="12" r="3"/>
+    <circle cx="28" cy="12" r="3"/>
+    <circle cx="12" cy="28" r="3"/>
+    <circle cx="28" cy="28" r="3"/>
+    <path stroke="#ffffff" stroke-width="1.5" opacity="0.9" d="M12 12h16M12 28h16M12 12v16M28 12v16"/>
+  </g>
+</svg>
