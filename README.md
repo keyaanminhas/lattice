@@ -829,6 +829,7 @@ Main “wow factor” screen.
 
 ### Includes
 
+* **Interactive Visual Relationship Graph (2D/3D Node Graph)** using React Force Graph or D3.js. Watch the AI build the ecosystem linkages in real-time.
 * List of AI-generated recommendations
 * Match score
 * Explanation
@@ -946,6 +947,20 @@ The AI summarises feedback and recommends whether similar matches should be reus
 
 ---
 
+## AI Feature 6: Administrator Copilot Chat
+
+The AI provides a conversational interface for the ecosystem owner to query the ecosystem in natural language.
+
+### Example
+
+Input:
+> "Find me all startups failing at marketing and draft emails introducing them to our Google Cloud partners."
+
+AI action:
+The system automatically generates the relationships and drafts the introduction emails.
+
+---
+
 # 11. Suggested Google Technology Integration
 
 The slides clearly assign marks for **Google Technology Integration**, **AI Implementation Quality**, **Working Demonstration & UI/UX**, and **AI Model Performance**, so the MVP should visibly use Google AI or Google Cloud in the architecture. 
@@ -969,7 +984,8 @@ The slides clearly assign marks for **Google Technology Integration**, **AI Impl
 If time is tight, use:
 
 * Gemini API for profile analysis
-* Gemini API for match recommendations
+* Gemini API for explainable match recommendations
+* Vertex AI Vector Embeddings for calculating the mathematical "distance" between startups and mentors
 * Firebase/Firestore for storing entities
 * Firebase Hosting or Cloud Run for deployment
 
@@ -1232,7 +1248,13 @@ The AI generates this insight:
 
 > “Healthtech MVP companies seeking clinical pilot access perform better when matched with mentors who have both regulatory and hospital partnership experience. Reuse this pattern for future similar companies.”
 
-That single demo covers the entire problem statement.
+**The "Time-Travel" Simulation (Outcome Learning Demo)**
+To prove the AI actually learns, we demonstrate a "Cohort 1 vs Cohort 2" scenario:
+1. Show a match being made in Cohort 1.
+2. Simulate that the match failed (e.g., mentor lacked specific API experience).
+3. Fast-forward time to Cohort 2 and run the matcher again. The AI visibly avoids the same mistake and shows a flag: *"Avoid assigning high-demand mentors to early-stage startups based on Cohort 1 failure."*
+
+That single demo covers the entire problem statement, including the hardest part: learning from past engagements.
 
 ---
 
